@@ -56,7 +56,9 @@ to `~/.config/opencode/tui.json`:
 }
 ```
 
-### Local development
+Restart OpenCode.
+
+## Local development
 
 ```sh
 git clone https://github.com/lhw/opencode-plugin-context
@@ -70,7 +72,7 @@ Then register it in `~/.config/opencode/tui.json` and restart OpenCode:
 ```jsonc
 {
   "plugin_enabled": { "internal:sidebar-context": false },
-  "plugin": [["./context/tui.js"]]
+  "plugin": [["./context/tui.js", {}]]
 }
 ```
 
