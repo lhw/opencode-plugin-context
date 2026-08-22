@@ -47,6 +47,9 @@ From npm:
 opencode plugin opencode-plugin-context --global --force
 ```
 
+The command installs the plugin **and registers it in
+`~/.config/opencode/tui.json`** — no manual `plugin` entry needed.
+
 Then disable the built-in block it replaces (it renders above yours) by adding
 to `~/.config/opencode/tui.json`:
 
