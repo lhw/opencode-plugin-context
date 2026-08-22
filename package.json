@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "opencode-plugin-context",
+  "version": "0.1.0",
+  "description": "OpenCode TUI plugin that renders the session's context-window usage as a colored, segmented bar (cached / prompt / thinking / output / reserved output) in the sidebar",
+  "type": "module",
+  "exports": {
+    "./tui": {
+      "import": "./dist/tui.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "opencode": ">=1.18.0"
+  },
+  "scripts": {
+    "build": "esbuild src/tui.ts --bundle --format=esm --platform=node --external:@opencode-ai/plugin --external:@opentui/solid --external:@opentui/core --external:solid-js --outfile=dist/tui.js",
+    "dev:install": "npm run build && mkdir -p \"$HOME/.config/opencode/context\" && cp dist/tui.js \"$HOME/.config/opencode/context/tui.js\"",
+    "typecheck": "tsc --noEmit",
+    "test": "node scripts/check.mjs",
+    "prepublishOnly": "npm run typecheck && npm run build && npm test"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "context",
+    "context-window",
+    "tokens",
+    "sidebar",
+    "tui"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lhw/opencode-plugin-context.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "peerDependencies": {
+    "@opencode-ai/plugin": ">=1.14.0",
+    "@opentui/core": ">=0.2.9",
+    "@opentui/solid": ">=0.2.9"
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "1.18.18",
+    "@opentui/core": "0.5.4",
+    "@opentui/keymap": "0.5.4",
+    "@opentui/solid": "0.5.4",
+    "@types/node": "^26.2.0",
+    "esbuild": "^0.28.0",
+    "solid-js": "1.9.12",
+    "typescript": "^7.0.2"
+  }
+}
