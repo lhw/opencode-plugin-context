@@ -10,6 +10,9 @@ updates:
         update-types:
           - minor
           - patch
+    ignore:
+      # @opentui 0.5.x peer-pins solid-js to exactly 1.9.12; bumping it breaks npm ci.
+      - dependency-name: "solid-js"
     commit-message:
       prefix: chore
       prefix-development: chore
