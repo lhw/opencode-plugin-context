@@ -3,23 +3,44 @@
 An OpenCode **TUI plugin** that replaces the built-in sidebar context block with a
 colored, segmented bar of the current session's **context-window usage**.
 
-The whole bar is the model's context window. Colors show what's using it —
-**cached** prompt, **user** input, **tool** calls + results (incl. MCP),
-**system** (system prompt + tool definitions + everything else opencode doesn't
-expose), **thinking** (reasoning tokens), **output**, and the model's **reserved
-output** headroom — plus the numbers you already track: total tokens used and
-money spent.
+The whole bar is the model's context window. By default it shows the real
+provider-reported buckets — **cached** prompt, **prompt** (uncached input incl.
+cache writes), **thinking** (reasoning tokens), **output**, and the model's
+**reserved output** headroom — plus the numbers you already track: total tokens
+used and money spent.
 
 ```
 Context
 ━━━━━━━━━━━━━━━━━ 69%
 138k / 200k tokens
 $0.04 spent
-▍c40k ▍u25k ▍m15k ▍s70k ▍t5k ▍o3k ▍r6k ▍f62k
+▍c40k ▍p90k ▍t5k ▍o3k ▍r6k ▍f62k
 ```
 
 One color-coded legend row follows the bar — `▍` marker in the segment's color,
 then a muted letter + count. Colors follow the active theme:
+
+| Segment            | Legend | Theme color | Default look          |
+| ------------------ | ------ | ----------- | --------------------- |
+| cached input       | `c`    | `success`   | green                 |
+| prompt (uncached input, incl. cache writes) | `p` | `accent` | blue |
+| thinking (reasoning tokens) | `t`    | `warning`   | amber                 |
+| output             | `o`    | `info`      | cyan                  |
+| reserved output    | `r`    | `textMuted` | grey                  |
+| free space         | `f`    | `text`      | white / default text  |
+
+With `estimate: true` the `prompt` bucket is split into **user** input, **tool**
+calls + results (incl. MCP) and **system** (the remainder), shown as two legend
+rows (used buckets, then reserved/free):
+
+```
+Context
+━━━━━━━━━━━━━━━━━ 69%
+▍c40k ▍u25k ▍m15k ▍s70k ▍t5k ▍o3k
+▍r6k ▍f62k
+138k / 200k tokens
+$0.04 spent
+```
 
 | Segment            | Legend | Theme color | Default look          |
 | ------------------ | ------ | ----------- | --------------------- |
@@ -58,7 +79,7 @@ All options are optional. Plugin entry in `tui.json`:
 
 | Option     | Default | Description                                                |
 | ---------- | ------- | ---------------------------------------------------------- |
-| `estimate` | `true`  | split the prompt into `u`/`m`/`s` using char-count estimates. `false` shows the single aggregate `p` (prompt) bucket instead |
+| `estimate` | `false` | split the prompt into `u`/`m`/`s` using char-count estimates. `true` replaces the single `p` (prompt) bucket with the estimated user/tool/system bars |
 | `exclude`  | `[]`    | segment ids to drop from the bar + legend: `cached`, `user`, `tools`, `system`, `prompt`, `think`, `out`, `reserved`, `free` |
 
 Excluded segments are removed from the visualization only; the tokens/cost and

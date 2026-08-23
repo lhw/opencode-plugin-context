@@ -37,7 +37,7 @@ function normalizeOptions(raw: unknown): PluginOptions {
     ? Array.from(new Set(obj.exclude.filter((id): id is SegmentId => typeof id === "string" && (VALID_SEGMENT_IDS as readonly string[]).includes(id))))
     : [];
   return {
-    estimate: typeof obj.estimate === "boolean" ? obj.estimate : true,
+    estimate: typeof obj.estimate === "boolean" ? obj.estimate : false,
     exclude,
   };
 }
@@ -114,17 +114,21 @@ function collectEstimates(api: TuiPluginApi, sessionId: string): Estimates {
   let tools = 0;
   for (const message of api.state.session.messages(sessionId)) {
     const role = (message as { role?: string }).role;
-    for (const part of api.state.part((message as { id: string }).id)) {
-      const p = part as { type?: string; text?: string; state?: { input?: unknown; output?: unknown; error?: unknown } };
-      if (p.type === "text" && role === "user") {
-        user += estimateTokens(p.text ?? "");
-      } else if (p.type === "tool") {
-        const state = p.state;
-        if (!state) continue;
-        if (state.input !== undefined) tools += estimateTokens(JSON.stringify(state.input));
-        if (typeof state.output === "string") tools += estimateTokens(state.output);
-        else if (typeof state.error === "string") tools += estimateTokens(state.error);
+    try {
+      for (const part of api.state.part((message as { id: string }).id)) {
+        const p = part as { type?: string; text?: string; state?: { input?: unknown; output?: unknown; error?: unknown } };
+        if (p.type === "text" && role === "user") {
+          user += estimateTokens(p.text ?? "");
+        } else if (p.type === "tool") {
+          const state = p.state;
+          if (!state) continue;
+          if (state.input !== undefined) tools += estimateTokens(JSON.stringify(state.input));
+          if (typeof state.output === "string") tools += estimateTokens(state.output);
+          else if (typeof state.error === "string") tools += estimateTokens(state.error);
+        }
       }
+    } catch {
+      // never let an unreadable part break the whole panel
     }
   }
   return { user, tools };
@@ -180,18 +184,37 @@ function renderPanel(api: TuiPluginApi, sessionId: string, config: PluginOptions
     );
     lines.push(
       box({ flexDirection: "row", justifyContent: "space-between" }, [
-        box({ flexDirection: "row" }, bar.map((cell) => text({ fg: segmentColor(cell.id, theme) }, ["━".repeat(cell.cells)]))),
+        box({ flexDirection: "row" }, bar.map((cell) => text({ fg: segmentColor(cell.id, theme, config.estimate) }, ["━".repeat(cell.cells)]))),
         text({ fg: tierColor(usage.percent, theme) }, [` ${usage.percent}%`]),
       ]),
     );
-    lines.push(
-      box({ flexDirection: "row", gap: 1 }, usage.segments.map((segment) =>
-        box({ flexDirection: "row" }, [
-          text({ fg: segmentColor(segment.id, theme) }, ["▍"]),
-          text({ fg: theme.textMuted }, [`${SEGMENT_LABEL[segment.id]}${formatCompact(segment.tokens)}`]),
-        ]),
-      )),
-    );
+    if (config.estimate) {
+      // Up to 8 marker+label entries don't fit the ~37-col sidebar on one line,
+      // so the estimate view splits into used buckets + window budget rows.
+      const legend = (ids: SegmentId[]) => {
+        const entries = usage.segments.filter((segment) => ids.includes(segment.id));
+        if (entries.length === 0) return null;
+        return box({ flexDirection: "row" }, entries.map((segment) =>
+          box({ flexDirection: "row" }, [
+            text({ fg: segmentColor(segment.id, theme, true) }, ["▍"]),
+            text({ fg: theme.textMuted }, [`${SEGMENT_LABEL[segment.id]}${formatCompact(segment.tokens)}`]),
+          ]),
+        ));
+      };
+      const usedLegend = legend(["cached", "user", "tools", "system", "think", "out"]);
+      const budgetLegend = legend(["reserved", "free"]);
+      if (usedLegend) lines.push(usedLegend);
+      if (budgetLegend) lines.push(budgetLegend);
+    } else {
+      lines.push(
+        box({ flexDirection: "row", gap: 1 }, usage.segments.map((segment) =>
+          box({ flexDirection: "row" }, [
+            text({ fg: segmentColor(segment.id, theme, false) }, ["▍"]),
+            text({ fg: theme.textMuted }, [`${SEGMENT_LABEL[segment.id]}${formatCompact(segment.tokens)}`]),
+          ]),
+        )),
+      );
+    }
   }
 
   if (hasUsage) {
@@ -211,17 +234,27 @@ function renderPanel(api: TuiPluginApi, sessionId: string, config: PluginOptions
   return box({ width: "100%", flexDirection: "column" }, lines);
 }
 
-function segmentColor(id: SegmentId, theme: TuiPluginApi["theme"]["current"]): unknown {
+function segmentColor(id: SegmentId, theme: TuiPluginApi["theme"]["current"], estimate: boolean): unknown {
+  if (estimate) {
+    switch (id) {
+      case "cached": return theme.success;
+      case "user": return theme.info;
+      case "tools": return theme.accent;
+      case "system": return theme.warning;
+      case "prompt": return theme.accent;
+      case "think": return theme.secondary;
+      case "out": return theme.text;
+      case "reserved": return theme.textMuted;
+      case "free": return theme.borderSubtle;
+    }
+  }
   switch (id) {
     case "cached": return theme.success;
-    case "user": return theme.info;
-    case "tools": return theme.accent;
-    case "system": return theme.warning;
     case "prompt": return theme.accent;
-    case "think": return theme.secondary;
-    case "out": return theme.text;
+    case "think": return theme.warning;
+    case "out": return theme.info;
     case "reserved": return theme.textMuted;
-    case "free": return theme.borderSubtle;
+    case "free": return theme.text;
   }
 }
 
