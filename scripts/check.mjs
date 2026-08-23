@@ -76,6 +76,12 @@ ok("segmentBar empty / unknown", () => {
   assert.deepEqual(segmentBar([{ id: "prompt", tokens: 10 }], 0, 20), []);
 });
 
+ok("segmentBar exclude drops re-appended free", () => {
+  assert.deepEqual(segmentBar([{ id: "prompt", tokens: 10 }], 100, 20, ["free"]), [
+    { id: "prompt", cells: 2 },
+  ]);
+});
+
 ok("estimateTokens chars/4", () => {
   assert.equal(estimateTokens(""), 0);
   assert.equal(estimateTokens("abcd"), 1);

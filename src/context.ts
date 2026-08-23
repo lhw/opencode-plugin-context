@@ -1,4 +1,4 @@
-export interface MsgTokens {
+interface MsgTokens {
   input: number;
   output: number;
   reasoning: number;
@@ -24,7 +24,7 @@ export type SegmentId =
   | "reserved"
   | "free";
 
-export interface Segment {
+interface Segment {
   id: SegmentId;
   /** tokens this segment occupies in the window */
   tokens: number;
@@ -140,18 +140,23 @@ export function computeContext(
  * filled by segment in order (rounded, floored-adjust to hit the width exactly);
  * `free` always consumes whatever is left, so a 0-token gap renders as empty cells.
  */
-export function segmentBar(segments: Segment[], window: number, width: number): { id: SegmentId; cells: number }[] {
+export function segmentBar(
+  segments: Segment[],
+  window: number,
+  width: number,
+  exclude: readonly SegmentId[] = [],
+): { id: SegmentId; cells: number }[] {
   if (window <= 0 || width <= 0) return [];
   let remaining = width;
   const out: { id: SegmentId; cells: number }[] = [];
-  let i = 0;
-  for (; i < segments.length; i++) {
-    const segment = segments[i];
+  for (const segment of segments) {
     if (segment.id === "free") break;
     const cells = Math.min(remaining, Math.round((segment.tokens / window) * width));
     if (cells > 0) out.push({ id: segment.id, cells });
     remaining -= cells;
   }
-  if (remaining > 0) out.push({ id: "free", cells: remaining });
+  // `free` is re-appended from leftover width, so an excluded "free" must be
+  // suppressed here — the input `segments` are already filtered upstream.
+  if (remaining > 0 && !exclude.includes("free")) out.push({ id: "free", cells: remaining });
   return out;
 }

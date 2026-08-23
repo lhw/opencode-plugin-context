@@ -1,8 +1,7 @@
-import { createElement, insert, setProp } from "@opentui/solid";
-import { createTextAttributes } from "@opentui/core";
+import { createTextAttributes, type RGBA } from "@opentui/core";
 import { createSignal } from "solid-js";
-import type { JSX } from "@opentui/solid";
 import type { TuiPluginApi, TuiPluginModule } from "@opencode-ai/plugin/tui";
+import type { JSX } from "@opentui/solid";
 import {
   computeContext,
   estimateTokens,
@@ -11,16 +10,10 @@ import {
   type ContextState,
   type Estimates,
   type SegmentId,
+  type WindowLimits,
 } from "./context.ts";
 
-type Child = JSX.Element | string | number | null | undefined | false;
-
-interface BarCell {
-  id: SegmentId;
-  cells: number;
-}
-
-export interface PluginOptions {
+interface PluginOptions {
   /** split the prompt bucket into user/tools/system using char-count estimates */
   estimate: boolean;
   /** segment ids to drop from the bar + legend */
@@ -32,7 +25,7 @@ const VALID_SEGMENT_IDS: readonly SegmentId[] = [
 ];
 
 function normalizeOptions(raw: unknown): PluginOptions {
-  const obj = isRecord(raw) ? raw : {};
+  const obj = typeof raw === "object" && raw !== null && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
   const exclude = Array.isArray(obj.exclude)
     ? Array.from(new Set(obj.exclude.filter((id): id is SegmentId => typeof id === "string" && (VALID_SEGMENT_IDS as readonly string[]).includes(id))))
     : [];
@@ -40,10 +33,6 @@ function normalizeOptions(raw: unknown): PluginOptions {
     estimate: typeof obj.estimate === "boolean" ? obj.estimate : false,
     exclude,
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 // Sidebar content is ~37 cols (width 42 - padding 2+2 - scrollbox 1); keep ~5
@@ -64,6 +53,8 @@ const SEGMENT_LABEL: Record<SegmentId, string> = {
 };
 
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
+const intFmt = new Intl.NumberFormat("en-US");
+const compactFmt = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
 
 const plugin: TuiPluginModule & { id: string } = {
   id: "opencode-plugin-context",
@@ -159,7 +150,7 @@ function sessionUsage(api: TuiPluginApi, sessionId: string, config: PluginOption
     }, 0);
 
   const counts = tokensOf(last as { tokens?: unknown });
-  let limits: { context: number; output: number } | undefined;
+  let limits: WindowLimits | undefined;
   if (last?.providerID && last.modelID) {
     const model = api.state.provider.find((p) => p.id === last.providerID)?.models[last.modelID];
     if (model?.limit?.context) {
@@ -173,20 +164,26 @@ function sessionUsage(api: TuiPluginApi, sessionId: string, config: PluginOption
 function renderPanel(api: TuiPluginApi, sessionId: string, config: PluginOptions): JSX.Element {
   const theme = api.theme.current;
   const usage = sessionUsage(api, sessionId, config);
-  const header: Child[] = [text({ fg: theme.text, attributes: BOLD }, ["Context"])];
+  const header = <text fg={theme.text} attributes={BOLD}>Context</text>;
 
-  const lines: Child[] = [header];
+  const lines: JSX.Element[] = [header];
   const hasUsage = usage.used > 0;
 
   if (usage.known && hasUsage) {
-    const bar: BarCell[] = segmentBar(usage.segments, usage.window, BAR_WIDTH).filter(
-      (cell) => !config.exclude.includes(cell.id),
-    );
+    const bar = segmentBar(usage.segments, usage.window, BAR_WIDTH, config.exclude);
     lines.push(
-      box({ flexDirection: "row", justifyContent: "space-between" }, [
-        box({ flexDirection: "row" }, bar.map((cell) => text({ fg: segmentColor(cell.id, theme, config.estimate) }, ["━".repeat(cell.cells)]))),
-        text({ fg: tierColor(usage.percent, theme) }, [` ${usage.percent}%`]),
-      ]),
+      <box flexDirection="row" justifyContent="space-between">
+        <box flexDirection="row">
+          {bar.map((cell) => (
+            <text fg={segmentColor(cell.id, theme, config.estimate)}>
+              {"━".repeat(cell.cells)}
+            </text>
+          ))}
+        </box>
+        <text fg={tierColor(usage.percent, theme)}>
+          {` ${usage.percent}%`}
+        </text>
+      </box>,
     );
     if (config.estimate) {
       // Up to 8 marker+label entries don't fit the ~37-col sidebar on one line,
@@ -194,12 +191,16 @@ function renderPanel(api: TuiPluginApi, sessionId: string, config: PluginOptions
       const legend = (ids: SegmentId[]) => {
         const entries = usage.segments.filter((segment) => ids.includes(segment.id));
         if (entries.length === 0) return null;
-        return box({ flexDirection: "row" }, entries.map((segment) =>
-          box({ flexDirection: "row" }, [
-            text({ fg: segmentColor(segment.id, theme, true) }, ["▍"]),
-            text({ fg: theme.textMuted }, [`${SEGMENT_LABEL[segment.id]}${formatCompact(segment.tokens)}`]),
-          ]),
-        ));
+        return (
+          <box flexDirection="row">
+            {entries.map((segment) => (
+              <box flexDirection="row">
+                <text fg={segmentColor(segment.id, theme, true)}>▍</text>
+                <text fg={theme.textMuted}>{SEGMENT_LABEL[segment.id]}{compactFmt.format(segment.tokens)}</text>
+              </box>
+            ))}
+          </box>
+        );
       };
       const usedLegend = legend(["cached", "user", "tools", "system", "think", "out"]);
       const budgetLegend = legend(["reserved", "free"]);
@@ -207,91 +208,54 @@ function renderPanel(api: TuiPluginApi, sessionId: string, config: PluginOptions
       if (budgetLegend) lines.push(budgetLegend);
     } else {
       lines.push(
-        box({ flexDirection: "row", gap: 1 }, usage.segments.map((segment) =>
-          box({ flexDirection: "row" }, [
-            text({ fg: segmentColor(segment.id, theme, false) }, ["▍"]),
-            text({ fg: theme.textMuted }, [`${SEGMENT_LABEL[segment.id]}${formatCompact(segment.tokens)}`]),
-          ]),
-        )),
+        <box flexDirection="row" gap={1}>
+          {usage.segments.map((segment) => (
+            <box flexDirection="row">
+              <text fg={segmentColor(segment.id, theme, false)}>▍</text>
+              <text fg={theme.textMuted}>{SEGMENT_LABEL[segment.id]}{compactFmt.format(segment.tokens)}</text>
+            </box>
+          ))}
+        </box>,
       );
     }
   }
 
   if (hasUsage) {
     lines.push(
-      text({ fg: theme.textMuted }, [
-        `${formatInt(usage.used)} / ${usage.known ? formatInt(usage.window) : "--"} tokens`,
-      ]),
+      <text fg={theme.textMuted}>
+        {`${intFmt.format(usage.used)} / ${usage.known ? intFmt.format(usage.window) : "--"} tokens`}
+      </text>,
     );
   } else {
-    lines.push(text({ fg: theme.textMuted }, ["no assistant turns yet"]));
+    lines.push(<text fg={theme.textMuted}>no assistant turns yet</text>);
   }
 
   if (usage.cost > 0) {
-    lines.push(text({ fg: theme.textMuted }, [`${money.format(usage.cost)} spent`]));
+    lines.push(<text fg={theme.textMuted}>{`${money.format(usage.cost)} spent`}</text>);
   }
 
-  return box({ width: "100%", flexDirection: "column" }, lines);
+  return <box width="100%" flexDirection="column">{lines}</box>;
 }
 
-function segmentColor(id: SegmentId, theme: TuiPluginApi["theme"]["current"], estimate: boolean): unknown {
-  if (estimate) {
-    switch (id) {
-      case "cached": return theme.success;
-      case "user": return theme.info;
-      case "tools": return theme.accent;
-      case "system": return theme.warning;
-      case "prompt": return theme.accent;
-      case "think": return theme.secondary;
-      case "out": return theme.text;
-      case "reserved": return theme.textMuted;
-      case "free": return theme.borderSubtle;
-    }
-  }
-  switch (id) {
-    case "cached": return theme.success;
-    case "prompt": return theme.accent;
-    case "think": return theme.warning;
-    case "out": return theme.info;
-    case "reserved": return theme.textMuted;
-    case "free": return theme.text;
-  }
+function segmentColor(id: SegmentId, theme: TuiPluginApi["theme"]["current"], estimate: boolean): RGBA {
+  const base: Record<SegmentId, RGBA> = {
+    cached: theme.success, prompt: theme.accent, think: theme.warning, out: theme.info,
+    reserved: theme.textMuted, free: theme.text,
+    user: theme.accent, tools: theme.accent, system: theme.accent,
+  };
+  if (!estimate) return base[id];
+  const est: Partial<Record<SegmentId, RGBA>> = {
+    user: theme.info, tools: theme.accent, system: theme.warning,
+    think: theme.secondary, out: theme.text, free: theme.borderSubtle,
+  };
+  return est[id] ?? base[id];
 }
 
-function tierColor(percent: number, theme: TuiPluginApi["theme"]["current"]): unknown {
+function tierColor(percent: number, theme: TuiPluginApi["theme"]["current"]): RGBA {
   if (percent >= 100) return theme.error;
   if (percent >= 75) return theme.warning;
   if (percent >= 50) return theme.accent;
   return theme.success;
-}
-
-function formatInt(value: number): string {
-  return new Intl.NumberFormat("en-US").format(value);
-}
-
-function formatCompact(value: number): string {
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
-  if (value >= 1_000) return `${Math.round(value / 1_000)}k`;
-  return String(value);
-}
-
-function element(tag: string, props: Record<string, unknown>, children: Child[] = []): JSX.Element {
-  const node = createElement(tag);
-  for (const [key, value] of Object.entries(props)) {
-    if (value !== undefined) setProp(node, key, value);
-  }
-  for (const child of children) {
-    if (child !== null && child !== undefined && child !== false) insert(node, child);
-  }
-  return node as unknown as JSX.Element;
-}
-
-function text(props: Record<string, unknown>, children: Child[] = []): JSX.Element {
-  return element("text", props, children);
-}
-
-function box(props: Record<string, unknown>, children: Child[] = []): JSX.Element {
-  return element("box", props, children);
 }
 
 export default plugin;

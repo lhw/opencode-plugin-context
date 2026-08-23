@@ -12,9 +12,9 @@ used and money spent.
 ```
 Context
 ━━━━━━━━━━━━━━━━━ 69%
-138k / 200k tokens
+138K / 200K tokens
 $0.04 spent
-▍c40k ▍p90k ▍t5k ▍o3k ▍r6k ▍f62k
+▍c40K ▍p90K ▍t5K ▍o3K ▍r6K ▍f62K
 ```
 
 One color-coded legend row follows the bar — `▍` marker in the segment's color,
@@ -36,9 +36,9 @@ rows (used buckets, then reserved/free):
 ```
 Context
 ━━━━━━━━━━━━━━━━━ 69%
-▍c40k ▍u25k ▍m15k ▍s70k ▍t5k ▍o3k
-▍r6k ▍f62k
-138k / 200k tokens
+▍c40K ▍u25K ▍m15K ▍s70K ▍t5K ▍o3K
+▍r6K ▍f62K
+138K / 200K tokens
 $0.04 spent
 ```
 
@@ -62,7 +62,7 @@ aren't exposed by opencode's plugin API).
 The bar spans the whole context window and fills the sidebar column: colored
 cells for each segment in that order, then `free` fills the remainder so the bar
 always reaches full width. A very small segment may not fill a single bar cell
-(e.g. 137 tokens in a 200k window is 0.07% of the bar) — its exact count is
+(e.g. 137 tokens in a 200K window is 0.07% of the bar) — its exact count is
 always visible in the legend. Percent is colored like the usage plugin: green
 `<50%`, amber `50–74%`, orange `75–99%`, red `100%`.
 
