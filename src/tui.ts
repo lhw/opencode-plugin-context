@@ -184,6 +184,14 @@ function renderPanel(api: TuiPluginApi, sessionId: string, config: PluginOptions
         text({ fg: tierColor(usage.percent, theme) }, [` ${usage.percent}%`]),
       ]),
     );
+    lines.push(
+      box({ flexDirection: "row", gap: 1 }, usage.segments.map((segment) =>
+        box({ flexDirection: "row" }, [
+          text({ fg: segmentColor(segment.id, theme) }, ["▍"]),
+          text({ fg: theme.textMuted }, [`${SEGMENT_LABEL[segment.id]}${formatCompact(segment.tokens)}`]),
+        ]),
+      )),
+    );
   }
 
   if (hasUsage) {
@@ -198,17 +206,6 @@ function renderPanel(api: TuiPluginApi, sessionId: string, config: PluginOptions
 
   if (usage.cost > 0) {
     lines.push(text({ fg: theme.textMuted }, [`${money.format(usage.cost)} spent`]));
-  }
-
-  if (usage.known && hasUsage) {
-    lines.push(
-      box({ flexDirection: "row", gap: 1 }, usage.segments.map((segment) =>
-        box({ flexDirection: "row" }, [
-          text({ fg: segmentColor(segment.id, theme) }, ["▍"]),
-          text({ fg: theme.textMuted }, [`${SEGMENT_LABEL[segment.id]}${formatCompact(segment.tokens)}`]),
-        ]),
-      )),
-    );
   }
 
   return box({ width: "100%", flexDirection: "column" }, lines);
