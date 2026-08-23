@@ -3,13 +3,47 @@ import { createTextAttributes } from "@opentui/core";
 import { createSignal } from "solid-js";
 import type { JSX } from "@opentui/solid";
 import type { TuiPluginApi, TuiPluginModule } from "@opencode-ai/plugin/tui";
-import { computeContext, segmentBar, tokensOf, type ContextState, type SegmentId } from "./context.ts";
+import {
+  computeContext,
+  estimateTokens,
+  segmentBar,
+  tokensOf,
+  type ContextState,
+  type Estimates,
+  type SegmentId,
+} from "./context.ts";
 
 type Child = JSX.Element | string | number | null | undefined | false;
 
 interface BarCell {
   id: SegmentId;
   cells: number;
+}
+
+export interface PluginOptions {
+  /** split the prompt bucket into user/tools/system using char-count estimates */
+  estimate: boolean;
+  /** segment ids to drop from the bar + legend */
+  exclude: SegmentId[];
+}
+
+const VALID_SEGMENT_IDS: readonly SegmentId[] = [
+  "cached", "user", "tools", "system", "prompt", "think", "out", "reserved", "free",
+];
+
+function normalizeOptions(raw: unknown): PluginOptions {
+  const obj = isRecord(raw) ? raw : {};
+  const exclude = Array.isArray(obj.exclude)
+    ? Array.from(new Set(obj.exclude.filter((id): id is SegmentId => typeof id === "string" && (VALID_SEGMENT_IDS as readonly string[]).includes(id))))
+    : [];
+  return {
+    estimate: typeof obj.estimate === "boolean" ? obj.estimate : true,
+    exclude,
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 // Sidebar content is ~37 cols (width 42 - padding 2+2 - scrollbox 1); keep ~5
@@ -19,6 +53,9 @@ const BOLD = createTextAttributes({ bold: true });
 const SLOT_ORDER = 60;
 const SEGMENT_LABEL: Record<SegmentId, string> = {
   cached: "c",
+  user: "u",
+  tools: "m",
+  system: "s",
   prompt: "p",
   think: "t",
   out: "o",
@@ -30,7 +67,8 @@ const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD
 
 const plugin: TuiPluginModule & { id: string } = {
   id: "opencode-plugin-context",
-  tui: async (api) => {
+  tui: async (api, rawOptions) => {
+    const config = normalizeOptions(rawOptions);
     // Reactive repaint: solid signal read inside the slot so the host re-renders
     // it when we bump it (api.renderer.requestRender alone does not repaint here).
     const [getRenderTick, setRenderTick] = createSignal(0);
@@ -63,14 +101,36 @@ const plugin: TuiPluginModule & { id: string } = {
       slots: {
         sidebar_content(_ctx, props) {
           getRenderTick(); // subscribe to repaint bumps (solid-reactive)
-          return renderPanel(api, props.session_id);
+          return renderPanel(api, props.session_id, config);
         },
       },
     });
   },
 };
 
-function sessionUsage(api: TuiPluginApi, sessionId: string): ContextState {
+/** char-count estimates of the visible prompt split, from message parts (incl. MCP tool calls). */
+function collectEstimates(api: TuiPluginApi, sessionId: string): Estimates {
+  let user = 0;
+  let tools = 0;
+  for (const message of api.state.session.messages(sessionId)) {
+    const role = (message as { role?: string }).role;
+    for (const part of api.state.part((message as { id: string }).id)) {
+      const p = part as { type?: string; text?: string; state?: { input?: unknown; output?: unknown; error?: unknown } };
+      if (p.type === "text" && role === "user") {
+        user += estimateTokens(p.text ?? "");
+      } else if (p.type === "tool") {
+        const state = p.state;
+        if (!state) continue;
+        if (state.input !== undefined) tools += estimateTokens(JSON.stringify(state.input));
+        if (typeof state.output === "string") tools += estimateTokens(state.output);
+        else if (typeof state.error === "string") tools += estimateTokens(state.error);
+      }
+    }
+  }
+  return { user, tools };
+}
+
+function sessionUsage(api: TuiPluginApi, sessionId: string, config: PluginOptions): ContextState {
   const messages = api.state.session.messages(sessionId);
   // Latest resolved assistant turn: matches what opencode itself reports.
   let last: { tokens?: unknown; providerID?: string; modelID?: string; cost?: number } | undefined;
@@ -102,19 +162,22 @@ function sessionUsage(api: TuiPluginApi, sessionId: string): ContextState {
       limits = { context: model.limit.context, output: model.limit.output ?? 0 };
     }
   }
-  return computeContext(counts, limits, cost);
+  const estimates = config.estimate ? collectEstimates(api, sessionId) : undefined;
+  return computeContext(counts, limits, cost, estimates, config.exclude);
 }
 
-function renderPanel(api: TuiPluginApi, sessionId: string): JSX.Element {
+function renderPanel(api: TuiPluginApi, sessionId: string, config: PluginOptions): JSX.Element {
   const theme = api.theme.current;
-  const usage = sessionUsage(api, sessionId);
+  const usage = sessionUsage(api, sessionId, config);
   const header: Child[] = [text({ fg: theme.text, attributes: BOLD }, ["Context"])];
 
   const lines: Child[] = [header];
   const hasUsage = usage.used > 0;
 
   if (usage.known && hasUsage) {
-    const bar: BarCell[] = segmentBar(usage.segments, usage.window, BAR_WIDTH);
+    const bar: BarCell[] = segmentBar(usage.segments, usage.window, BAR_WIDTH).filter(
+      (cell) => !config.exclude.includes(cell.id),
+    );
     lines.push(
       box({ flexDirection: "row", justifyContent: "space-between" }, [
         box({ flexDirection: "row" }, bar.map((cell) => text({ fg: segmentColor(cell.id, theme) }, ["━".repeat(cell.cells)]))),
@@ -154,11 +217,14 @@ function renderPanel(api: TuiPluginApi, sessionId: string): JSX.Element {
 function segmentColor(id: SegmentId, theme: TuiPluginApi["theme"]["current"]): unknown {
   switch (id) {
     case "cached": return theme.success;
+    case "user": return theme.info;
+    case "tools": return theme.accent;
+    case "system": return theme.warning;
     case "prompt": return theme.accent;
-    case "think": return theme.warning;
-    case "out": return theme.info;
+    case "think": return theme.secondary;
+    case "out": return theme.text;
     case "reserved": return theme.textMuted;
-    case "free": return theme.text;
+    case "free": return theme.borderSubtle;
   }
 }
 

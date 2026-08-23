@@ -1,6 +1,6 @@
 // Self-check for the pure context-window math (src/context.ts). Node >= 22.6.
 import assert from "node:assert/strict";
-import { computeContext, segmentBar, tokensOf } from "../src/context.ts";
+import { computeContext, estimateTokens, segmentBar, tokensOf } from "../src/context.ts";
 
 const ok = (name, fn) => {
   fn();
@@ -74,6 +74,43 @@ ok("segmentBar fills exactly", () => {
 ok("segmentBar empty / unknown", () => {
   assert.deepEqual(segmentBar([], 100, 20), [{ id: "free", cells: 20 }]);
   assert.deepEqual(segmentBar([{ id: "prompt", tokens: 10 }], 0, 20), []);
+});
+
+ok("estimateTokens chars/4", () => {
+  assert.equal(estimateTokens(""), 0);
+  assert.equal(estimateTokens("abcd"), 1);
+  assert.equal(estimateTokens("abcdefghij"), 3);
+});
+
+ok("computeContext with estimates splits prompt", () => {
+  const counts = { input: 100_000, output: 2_000, reasoning: 500, cacheRead: 20_000, cacheWrite: 10_000 };
+  const s = computeContext(counts, { context: 200_000, output: 8_000 }, 0, { user: 25_000, tools: 15_000 });
+  assert.equal(s.used, 132_500);
+  assert.deepEqual(s.segments, [
+    { id: "cached", tokens: 20_000 },
+    { id: "user", tokens: 25_000 },
+    { id: "tools", tokens: 15_000 },
+    // prompt bucket (input 100k + cacheWrite 10k) minus user+tools
+    { id: "system", tokens: 70_000 },
+    { id: "think", tokens: 500 },
+    { id: "out", tokens: 2_000 },
+    { id: "reserved", tokens: 6_000 },
+    { id: "free", tokens: 61_500 },
+  ]);
+});
+
+ok("computeContext estimates clamp system at 0", () => {
+  const counts = { input: 40_000, output: 1_000, reasoning: 0, cacheRead: 0, cacheWrite: 0 };
+  const s = computeContext(counts, { context: 100_000, output: 4_000 }, 0, { user: 35_000, tools: 30_000 });
+  assert.equal(s.segments.some((segment) => segment.id === "system"), false);
+});
+
+ok("computeContext exclude drops segments", () => {
+  const counts = { input: 100_000, output: 2_000, reasoning: 500, cacheRead: 20_000, cacheWrite: 10_000 };
+  const s = computeContext(counts, { context: 200_000, output: 8_000 }, 0, { user: 25_000, tools: 15_000 }, ["system", "reserved"]);
+  assert.equal(s.segments.some((segment) => segment.id === "system"), false);
+  assert.equal(s.segments.some((segment) => segment.id === "reserved"), false);
+  assert.equal(s.segments.some((segment) => segment.id === "free"), true);
 });
 
 console.log("\nall checks passed");

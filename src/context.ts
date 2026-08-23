@@ -13,12 +13,27 @@ export interface WindowLimits {
   output: number;
 }
 
-export type SegmentId = "cached" | "prompt" | "think" | "out" | "reserved" | "free";
+export type SegmentId =
+  | "cached"
+  | "user"
+  | "tools"
+  | "system"
+  | "prompt"
+  | "think"
+  | "out"
+  | "reserved"
+  | "free";
 
 export interface Segment {
   id: SegmentId;
   /** tokens this segment occupies in the window */
   tokens: number;
+}
+
+/** char-count based estimates of the visible prompt split (user input vs tool calls+results) */
+export interface Estimates {
+  user: number;
+  tools: number;
 }
 
 export interface ContextState {
@@ -28,7 +43,7 @@ export interface ContextState {
   window: number;
   /** used / window, 0..100 */
   percent: number;
-  /** nonzero segments, ordered: cached, prompt, think, out, reserved, free */
+  /** nonzero segments, ordered, excluding any ids in `exclude` */
   segments: Segment[];
   /** total session cost (USD) */
   cost: number;
@@ -57,33 +72,64 @@ function num(v: unknown): number {
 }
 
 /**
+ * Same chars-per-token heuristic opencode itself uses for compaction decisions
+ * (`packages/core/src/util/token.ts`). Estimates, not exact tokenization.
+ */
+export function estimateTokens(input: string): number {
+  return Math.max(0, Math.round(input.length / 4));
+}
+
+/**
  * Split the (already-aggregated) token buckets of the latest assistant message
  * into the context-window bar: cached + prompt (incl. cache writes) + thinking +
  * output, then the model's reserved output headroom, then free space.
  * Multipliers of the same underlying tokens are never double-counted: `used`
  * matches opencode's own total (input + output + reasoning + cache.read + cache.write).
+ *
+ * When `estimates` is given, the `prompt` bucket is split into user input / tool
+ * calls+results (both estimated from visible parts) and the remaining `system`
+ * bucket (system prompt + tool definitions + everything else opencode doesn't
+ * expose). `exclude` drops segments from the result entirely.
  */
-export function computeContext(counts: MsgTokens, limits: WindowLimits | undefined, cost = 0): ContextState {
+export function computeContext(
+  counts: MsgTokens,
+  limits: WindowLimits | undefined,
+  cost = 0,
+  estimates?: Estimates,
+  exclude: readonly SegmentId[] = [],
+): ContextState {
   const { input, output, reasoning, cacheRead, cacheWrite } = counts;
   const used = input + cacheRead + cacheWrite + reasoning + output;
   const window = limits && limits.context > 0 ? limits.context : 0;
   const reserved = limits && limits.output > 0 ? Math.max(0, limits.output - output) : 0;
   const free = window > 0 ? Math.max(0, window - used - reserved) : 0;
+  const prompt = input + cacheWrite;
 
-  const raw: Segment[] = [
-    { id: "cached", tokens: cacheRead },
-    { id: "prompt", tokens: input + cacheWrite },
-    { id: "think", tokens: reasoning },
-    { id: "out", tokens: output },
-    { id: "reserved", tokens: reserved },
-    { id: "free", tokens: free },
-  ];
+  const raw: Segment[] = estimates
+    ? [
+        { id: "cached", tokens: cacheRead },
+        { id: "user", tokens: estimates.user },
+        { id: "tools", tokens: estimates.tools },
+        { id: "system", tokens: Math.max(0, prompt - estimates.user - estimates.tools) },
+        { id: "think", tokens: reasoning },
+        { id: "out", tokens: output },
+        { id: "reserved", tokens: reserved },
+        { id: "free", tokens: free },
+      ]
+    : [
+        { id: "cached", tokens: cacheRead },
+        { id: "prompt", tokens: prompt },
+        { id: "think", tokens: reasoning },
+        { id: "out", tokens: output },
+        { id: "reserved", tokens: reserved },
+        { id: "free", tokens: free },
+      ];
 
   return {
     used,
     window,
     percent: window > 0 ? Math.min(100, Math.round((used / window) * 100)) : 0,
-    segments: raw.filter((segment) => segment.tokens > 0),
+    segments: raw.filter((segment) => segment.tokens > 0 && !exclude.includes(segment.id)),
     cost,
     known: window > 0,
   };
