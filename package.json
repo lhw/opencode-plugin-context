@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "opencode-plugin-context",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "OpenCode TUI plugin that renders the session's context-window usage as a colored, segmented bar (cached / prompt / thinking / output / reserved output) in the sidebar",
   "type": "module",
   "exports": {
