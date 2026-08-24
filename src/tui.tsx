@@ -188,33 +188,53 @@ function renderPanel(api: TuiPluginApi, sessionId: string, config: PluginOptions
     if (config.estimate) {
       // Up to 8 marker+label entries don't fit the ~37-col sidebar on one line,
       // so the estimate view splits into used buckets + window budget rows.
-      const legend = (ids: SegmentId[]) => {
-        const entries = usage.segments.filter((segment) => ids.includes(segment.id));
-        if (entries.length === 0) return null;
+      // Each row's marker sits at the cumulative bar offset of its segment so
+      // they line up with the cells above.
+      const cellsById = new Map(bar.map((cell) => [cell.id, cell.cells]));
+      const tokenById = new Map(usage.segments.map((segment) => [segment.id, segment.tokens]));
+      const row = (ids: SegmentId[], startAt: number) => {
+        const items = ids
+          .map((id) => ({ id, cells: cellsById.get(id) ?? 0, tokens: tokenById.get(id) ?? 0 }))
+          .filter((item) => item.cells > 0 || item.tokens > 0);
+        if (items.length === 0) return null;
+        let cumulative = startAt;
         return (
           <box flexDirection="row">
-            {entries.map((segment) => (
-              <box flexDirection="row">
-                <text fg={segmentColor(segment.id, theme, true)}>▍</text>
-                <text fg={theme.textMuted}>{SEGMENT_LABEL[segment.id]}{compactFmt.format(segment.tokens)}</text>
-              </box>
-            ))}
+            {items.map((item) => {
+              const marginLeft = cumulative;
+              cumulative += item.cells;
+              return (
+                <box flexDirection="row" marginLeft={marginLeft}>
+                  <text fg={segmentColor(item.id, theme, true)}>▍</text>
+                  <text fg={theme.textMuted}>{SEGMENT_LABEL[item.id]}{compactFmt.format(item.tokens)}</text>
+                </box>
+              );
+            })}
           </box>
         );
       };
-      const usedLegend = legend(["cached", "user", "tools", "system", "think", "out"]);
-      const budgetLegend = legend(["reserved", "free"]);
+      const usedStart = 0;
+      const usedIds: SegmentId[] = ["cached", "user", "tools", "system", "think", "out"];
+      const budgetStart = usedIds.reduce((sum, id) => sum + (cellsById.get(id) ?? 0), 0);
+      const usedLegend = row(usedIds, usedStart);
+      const budgetLegend = row(["reserved", "free"], budgetStart);
       if (usedLegend) lines.push(usedLegend);
       if (budgetLegend) lines.push(budgetLegend);
     } else {
+      const tokenById = new Map(usage.segments.map((segment) => [segment.id, segment.tokens]));
+      let cumulative = 0;
       lines.push(
-        <box flexDirection="row" gap={1}>
-          {usage.segments.map((segment) => (
-            <box flexDirection="row">
-              <text fg={segmentColor(segment.id, theme, false)}>▍</text>
-              <text fg={theme.textMuted}>{SEGMENT_LABEL[segment.id]}{compactFmt.format(segment.tokens)}</text>
-            </box>
-          ))}
+        <box flexDirection="row">
+          {bar.map((cell) => {
+            const marginLeft = cumulative;
+            cumulative += cell.cells;
+            return (
+              <box flexDirection="row" marginLeft={marginLeft}>
+                <text fg={segmentColor(cell.id, theme, false)}>▍</text>
+                <text fg={theme.textMuted}>{SEGMENT_LABEL[cell.id]}{compactFmt.format(tokenById.get(cell.id) ?? 0)}</text>
+              </box>
+            );
+          })}
         </box>,
       );
     }
