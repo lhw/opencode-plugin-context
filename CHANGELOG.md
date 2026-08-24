@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1](https://github.com/lhw/opencode-plugin-context/compare/v1.1.0...v1.1.1) (2026-08-24)
+
+
+### Bug Fixes
+
+* align legend markers with bar segments ([510aa96](https://github.com/lhw/opencode-plugin-context/commit/510aa9682460fc9b026d7e16d624f2708f2b630e))
+
 ## [1.1.0](https://github.com/lhw/opencode-plugin-context/compare/v1.0.0...v1.1.0) (2026-08-23)
 
 
