@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.2](https://github.com/lhw/opencode-plugin-context/compare/v1.1.1...v1.1.2) (2026-09-02)
+
+
+### Bug Fixes
+
+* reuse web UI context categories and single-number legend ([f929b3b](https://github.com/lhw/opencode-plugin-context/commit/f929b3b367c59c88e7077621de5f2b8c5e86911c))
+
 ## [1.1.1](https://github.com/lhw/opencode-plugin-context/compare/v1.1.0...v1.1.1) (2026-08-24)
 
 
