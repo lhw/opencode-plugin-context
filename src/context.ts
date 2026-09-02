@@ -17,8 +17,11 @@ export type SegmentId =
   | "cached"
   | "user"
   | "tools"
+  | "tool"
   | "system"
   | "prompt"
+  | "assistant"
+  | "other"
   | "think"
   | "out"
   | "reserved"
@@ -34,6 +37,11 @@ interface Segment {
 export interface Estimates {
   user: number;
   tools: number;
+  /** optional web-ui categories — when present, `computeContext` uses web-style scaling */
+  system?: number;
+  assistant?: number;
+  tool?: number;
+  other?: number;
 }
 
 export interface ContextState {
@@ -74,9 +82,37 @@ function num(v: unknown): number {
 /**
  * Same chars-per-token heuristic opencode itself uses for compaction decisions
  * (`packages/core/src/util/token.ts`). Estimates, not exact tokenization.
+ * Matches web UI `estimateTokens = ceil(chars/4)` in `session-context-breakdown.ts`.
  */
 export function estimateTokens(input: string): number {
-  return Math.max(0, Math.round(input.length / 4));
+  return Math.max(0, Math.ceil(input.length / 4));
+}
+
+/** Compact legend formatter — single-number `k`, no decimals, min `1k` for <1000. */
+export function formatCompactTokens(tokens: number): string {
+  if (tokens <= 0) return "0";
+  const k = Math.round(tokens / 1000);
+  return `${Math.max(1, k)}k`;
+}
+
+/** Port of web UI `estimateSessionContextBreakdown` scaling (char estimates → prompt budget). */
+function scaleToPrompt(
+  raw: { system: number; user: number; assistant: number; tool: number },
+  prompt: number,
+): { system: number; user: number; assistant: number; tool: number; other: number } {
+  const estimated = raw.system + raw.user + raw.assistant + raw.tool;
+  if (estimated <= prompt) {
+    return { ...raw, other: prompt - estimated };
+  }
+  const scale = prompt / estimated;
+  const scaled = {
+    system: Math.floor(raw.system * scale),
+    user: Math.floor(raw.user * scale),
+    assistant: Math.floor(raw.assistant * scale),
+    tool: Math.floor(raw.tool * scale),
+  };
+  const total = scaled.system + scaled.user + scaled.assistant + scaled.tool;
+  return { ...scaled, other: Math.max(0, prompt - total) };
 }
 
 /**
@@ -105,8 +141,40 @@ export function computeContext(
   const free = window > 0 ? Math.max(0, window - used - reserved) : 0;
   const prompt = input + cacheWrite;
 
-  const raw: Segment[] = estimates
-    ? [
+  const normalizeExclude = (id: SegmentId) => {
+    // alias: "tools" and "tool" are the same bucket
+    if (id === "tools" || id === "tool") return exclude.includes("tools") || exclude.includes("tool");
+    return exclude.includes(id);
+  };
+  const excluded = (id: SegmentId) => normalizeExclude(id);
+
+  let raw: Segment[];
+  if (estimates) {
+    // web-ui categories: if caller provides system/assistant/tool use scaled breakdown (reuse web logic)
+    const hasWebCats = estimates.system !== undefined || estimates.assistant !== undefined || estimates.tool !== undefined;
+    if (hasWebCats) {
+      const rawTokens = {
+        system: Math.max(0, estimates.system ?? 0),
+        user: Math.max(0, estimates.user ?? 0),
+        assistant: Math.max(0, estimates.assistant ?? 0),
+        tool: Math.max(0, estimates.tool ?? estimates.tools ?? 0),
+      };
+      const scaled = scaleToPrompt(rawTokens, prompt);
+      raw = [
+        { id: "cached", tokens: cacheRead },
+        { id: "system", tokens: scaled.system },
+        { id: "user", tokens: scaled.user },
+        { id: "assistant", tokens: scaled.assistant },
+        { id: "tool", tokens: scaled.tool },
+        { id: "other", tokens: scaled.other },
+        { id: "think", tokens: reasoning },
+        { id: "out", tokens: output },
+        { id: "reserved", tokens: reserved },
+        { id: "free", tokens: free },
+      ];
+    } else {
+      // legacy: user + tools, remainder is system
+      raw = [
         { id: "cached", tokens: cacheRead },
         { id: "user", tokens: estimates.user },
         { id: "tools", tokens: estimates.tools },
@@ -115,21 +183,27 @@ export function computeContext(
         { id: "out", tokens: output },
         { id: "reserved", tokens: reserved },
         { id: "free", tokens: free },
-      ]
-    : [
-        { id: "cached", tokens: cacheRead },
-        { id: "prompt", tokens: prompt },
-        { id: "think", tokens: reasoning },
-        { id: "out", tokens: output },
-        { id: "reserved", tokens: reserved },
-        { id: "free", tokens: free },
       ];
+    }
+  } else {
+    raw = [
+      { id: "cached", tokens: cacheRead },
+      { id: "prompt", tokens: prompt },
+      { id: "think", tokens: reasoning },
+      { id: "out", tokens: output },
+      { id: "reserved", tokens: reserved },
+      { id: "free", tokens: free },
+    ];
+  }
+
+  // legacy "tools" ↔ "tool" alias: filter uses normalized check
+  const filtered = raw.filter((segment) => segment.tokens > 0 && !excluded(segment.id));
 
   return {
     used,
     window,
     percent: window > 0 ? Math.min(100, Math.round((used / window) * 100)) : 0,
-    segments: raw.filter((segment) => segment.tokens > 0 && !exclude.includes(segment.id)),
+    segments: filtered,
     cost,
     known: window > 0,
   };

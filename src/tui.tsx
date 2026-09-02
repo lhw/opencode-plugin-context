@@ -5,6 +5,7 @@ import type { JSX } from "@opentui/solid";
 import {
   computeContext,
   estimateTokens,
+  formatCompactTokens,
   segmentBar,
   tokensOf,
   type ContextState,
@@ -21,7 +22,7 @@ interface PluginOptions {
 }
 
 const VALID_SEGMENT_IDS: readonly SegmentId[] = [
-  "cached", "user", "tools", "system", "prompt", "think", "out", "reserved", "free",
+  "cached", "user", "tools", "tool", "system", "prompt", "assistant", "other", "think", "out", "reserved", "free",
 ];
 
 function normalizeOptions(raw: unknown): PluginOptions {
@@ -44,8 +45,11 @@ const SEGMENT_LABEL: Record<SegmentId, string> = {
   cached: "c",
   user: "u",
   tools: "m",
+  tool: "m",
   system: "s",
   prompt: "p",
+  assistant: "a",
+  other: "x",
   think: "t",
   out: "o",
   reserved: "r",
@@ -54,7 +58,8 @@ const SEGMENT_LABEL: Record<SegmentId, string> = {
 
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 const intFmt = new Intl.NumberFormat("en-US");
-const compactFmt = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
+// ponytail: single-number k, no decimals (was compact 1-decimal → c34.3k); use formatCompactTokens
+const compact = (n: number) => formatCompactTokens(n);
 
 const plugin: TuiPluginModule & { id: string } = {
   id: "opencode-plugin-context",
@@ -99,30 +104,65 @@ const plugin: TuiPluginModule & { id: string } = {
   },
 };
 
-/** char-count estimates of the visible prompt split, from message parts (incl. MCP tool calls). */
+/** web-ui parity: chars/4 estimates per `session-context-breakdown.ts` (system/user/assistant/tool) */
 function collectEstimates(api: TuiPluginApi, sessionId: string): Estimates {
+  let system = 0;
   let user = 0;
-  let tools = 0;
-  for (const message of api.state.session.messages(sessionId)) {
+  let assistant = 0;
+  let tool = 0;
+
+  // system prompt: last user message's `system` field (web UI `findLast(...m.system)`)
+  let systemPrompt: string | undefined;
+  const messages = [...api.state.session.messages(sessionId)] as Array<{ id: string; role?: string; system?: string }>;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const s = messages[i]?.system?.trim();
+    if (s) { systemPrompt = s; break; }
+  }
+  if (systemPrompt) system += estimateTokens(systemPrompt);
+
+  for (const message of messages) {
     const role = (message as { role?: string }).role;
     try {
       for (const part of api.state.part((message as { id: string }).id)) {
-        const p = part as { type?: string; text?: string; state?: { input?: unknown; output?: unknown; error?: unknown } };
-        if (p.type === "text" && role === "user") {
-          user += estimateTokens(p.text ?? "");
-        } else if (p.type === "tool") {
-          const state = p.state;
-          if (!state) continue;
-          if (state.input !== undefined) tools += estimateTokens(JSON.stringify(state.input));
-          if (typeof state.output === "string") tools += estimateTokens(state.output);
-          else if (typeof state.error === "string") tools += estimateTokens(state.error);
+        const p = part as {
+          type?: string; text?: string;
+          state?: { input?: unknown; output?: unknown; error?: unknown; raw?: string; status?: string };
+          source?: { text?: { value: string }; value?: string };
+        };
+        // user parts: text / file / agent  (web: charsFromUserPart)
+        if (role === "user") {
+          if (p.type === "text") user += estimateTokens(p.text ?? "");
+          else if (p.type === "file") user += estimateTokens(p.source?.text?.value ?? "");
+          else if (p.type === "agent") user += estimateTokens(p.source?.value ?? "");
+        } else if (role === "assistant") {
+          // assistant text/reasoning → assistant; tool → tool  (web: charsFromAssistantPart)
+          if (p.type === "text" || p.type === "reasoning") {
+            assistant += estimateTokens(p.text ?? "");
+          } else if (p.type === "tool") {
+            const state = p.state as { input?: unknown; output?: unknown; error?: unknown; raw?: string; status?: string } | undefined;
+            if (!state) continue;
+            const inputKeys = state.input && typeof state.input === "object" ? Object.keys(state.input as object).length : 0;
+            const inputChars = inputKeys * 16;
+            let out = "";
+            if (state.status === "pending") out = (state.raw as string) ?? "";
+            else if (state.status === "completed") out = typeof state.output === "string" ? state.output : "";
+            else if (state.status === "error") out = typeof state.error === "string" ? state.error : "";
+            else {
+              if (typeof state.output === "string") out = state.output;
+              else if (typeof state.error === "string") out = state.error;
+              else if (typeof state.raw === "string") out = state.raw;
+            }
+            // web counts input overhead + output length together
+            const combined = "x".repeat(inputChars) + out;
+            tool += estimateTokens(combined);
+          }
         }
       }
     } catch {
       // never let an unreadable part break the whole panel
     }
   }
-  return { user, tools };
+  return { system, user, assistant, tool, tools: tool };
 }
 
 function sessionUsage(api: TuiPluginApi, sessionId: string, config: PluginOptions): ContextState {
@@ -186,10 +226,8 @@ function renderPanel(api: TuiPluginApi, sessionId: string, config: PluginOptions
       </box>,
     );
     if (config.estimate) {
-      // Up to 8 marker+label entries don't fit the ~37-col sidebar on one line,
-      // so the estimate view splits into used buckets + window budget rows.
-      // Each row's marker sits at the cumulative bar offset of its segment so
-      // they line up with the cells above.
+      // web-ui categories: system/user/assistant/tool/other — reuse web's 5-way split for the prompt.
+      // Up to 9 entries don't fit on one line, split into used buckets + window budget rows.
       const cellsById = new Map(bar.map((cell) => [cell.id, cell.cells]));
       const tokenById = new Map(usage.segments.map((segment) => [segment.id, segment.tokens]));
       const row = (ids: SegmentId[], startAt: number) => {
@@ -206,7 +244,7 @@ function renderPanel(api: TuiPluginApi, sessionId: string, config: PluginOptions
               return (
                 <box flexDirection="row" marginLeft={marginLeft}>
                   <text fg={segmentColor(item.id, theme, true)}>▍</text>
-                  <text fg={theme.textMuted}>{SEGMENT_LABEL[item.id]}{compactFmt.format(item.tokens)}</text>
+                  <text fg={theme.textMuted}>{SEGMENT_LABEL[item.id]}{compact(item.tokens)}</text>
                 </box>
               );
             })}
@@ -214,8 +252,9 @@ function renderPanel(api: TuiPluginApi, sessionId: string, config: PluginOptions
         );
       };
       const usedStart = 0;
-      const usedIds: SegmentId[] = ["cached", "user", "tools", "system", "think", "out"];
-      const budgetStart = usedIds.reduce((sum, id) => sum + (cellsById.get(id) ?? 0), 0);
+      const usedIds: SegmentId[] = ["cached", "system", "user", "assistant", "tool", "other", "think", "out"];
+      // alias: older data may still emit "tools" — fall back for cell counts
+      const budgetStart = usedIds.reduce((sum, id) => sum + (cellsById.get(id) ?? (id === "tool" ? cellsById.get("tools" as SegmentId) ?? 0 : 0)), 0);
       const usedLegend = row(usedIds, usedStart);
       const budgetLegend = row(["reserved", "free"], budgetStart);
       if (usedLegend) lines.push(usedLegend);
@@ -231,7 +270,7 @@ function renderPanel(api: TuiPluginApi, sessionId: string, config: PluginOptions
             return (
               <box flexDirection="row" marginLeft={marginLeft}>
                 <text fg={segmentColor(cell.id, theme, false)}>▍</text>
-                <text fg={theme.textMuted}>{SEGMENT_LABEL[cell.id]}{compactFmt.format(tokenById.get(cell.id) ?? 0)}</text>
+                <text fg={theme.textMuted}>{SEGMENT_LABEL[cell.id]}{compact(tokenById.get(cell.id) ?? 0)}</text>
               </box>
             );
           })}
@@ -258,15 +297,27 @@ function renderPanel(api: TuiPluginApi, sessionId: string, config: PluginOptions
 }
 
 function segmentColor(id: SegmentId, theme: TuiPluginApi["theme"]["current"], estimate: boolean): RGBA {
+  // ponytail: reuse web UI BREAKDOWN_COLOR mapping (system/user/assistant/tool/other)
   const base: Record<SegmentId, RGBA> = {
     cached: theme.success, prompt: theme.accent, think: theme.warning, out: theme.info,
     reserved: theme.textMuted, free: theme.text,
-    user: theme.accent, tools: theme.accent, system: theme.accent,
+    user: theme.accent, tools: theme.accent, tool: theme.accent, system: theme.accent,
+    assistant: theme.accent, other: theme.accent,
   };
   if (!estimate) return base[id];
+  // web: system=info, user=success, assistant=secondary, tool=warning, other=comment
   const est: Partial<Record<SegmentId, RGBA>> = {
-    user: theme.info, tools: theme.accent, system: theme.warning,
-    think: theme.secondary, out: theme.text, free: theme.borderSubtle,
+    system: theme.info,
+    user: theme.success,
+    assistant: theme.secondary,
+    tool: theme.warning,
+    tools: theme.warning,
+    other: theme.textMuted,
+    cached: theme.success,
+    think: theme.secondary,
+    out: theme.text,
+    reserved: theme.textMuted,
+    free: theme.borderSubtle,
   };
   return est[id] ?? base[id];
 }
