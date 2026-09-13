@@ -4,6 +4,7 @@ import type { TuiPluginApi, TuiPluginModule } from "@opencode-ai/plugin/v1/tui";
 import type { JSX } from "@opentui/solid";
 import {
   computeContext,
+  createTpsTracker,
   estimateTokens,
   formatCompactTokens,
   segmentBar,
@@ -11,6 +12,7 @@ import {
   type ContextState,
   type Estimates,
   type SegmentId,
+  type TpsTracker,
   type WindowLimits,
 } from "./context.ts";
 
@@ -73,6 +75,46 @@ const plugin: TuiPluginModule & { id: string } = {
       api.renderer.requestRender();
     };
 
+    // Live TPS: token deltas are estimated with the same chars/4 heuristic the
+    // panel already uses, tracked per session. Sub-token deltas are carried over
+    // so a stream of 1-char chunks still counts.
+    const trackers = new Map<string, TpsTracker>();
+    const carries = new Map<string, number>();
+    const trackerFor = (sessionId: string): TpsTracker => {
+      let tracker = trackers.get(sessionId);
+      if (!tracker) {
+        tracker = createTpsTracker();
+        trackers.set(sessionId, tracker);
+        // ponytail: unbounded map; sessions are few, cap + LRU-evict if it ever churns.
+      }
+      return tracker;
+    };
+    const onDelta = (sessionId: string, text: string, at: number) => {
+      const carry = (carries.get(sessionId) ?? 0) + text.length;
+      const tokens = Math.floor(carry / 4);
+      carries.set(sessionId, carry - tokens * 4);
+      if (tokens > 0) trackerFor(sessionId).record(tokens, at);
+      throttledRepaint();
+    };
+
+    // Token deltas arrive in ~10ms batches; throttle repaints so the sidebar
+    // doesn't re-render once per chunk.
+    let lastRepaint = 0;
+    let pendingRepaint: ReturnType<typeof setTimeout> | undefined;
+    const throttledRepaint = () => {
+      const wait = lastRepaint + 50 - Date.now();
+      if (wait <= 0) {
+        lastRepaint = Date.now();
+        repaint();
+      } else if (pendingRepaint === undefined) {
+        pendingRepaint = setTimeout(() => {
+          pendingRepaint = undefined;
+          lastRepaint = Date.now();
+          repaint();
+        }, wait);
+      }
+    };
+
     // Repaint on the session-level events that exist in both opencode 1.x and
     // v2 (created/status/idle) and lean on the interval below for in-turn
     // updates. (v2 dropped the per-message events this panel used to watch.)
@@ -80,6 +122,8 @@ const plugin: TuiPluginModule & { id: string } = {
       api.event.on("session.created", repaint),
       api.event.on("session.status", repaint),
       api.event.on("session.idle", repaint),
+      api.event.on("session.text.delta", (event) => onDelta(event.data.sessionID, event.data.delta, event.created)),
+      api.event.on("session.reasoning.delta", (event) => onDelta(event.data.sessionID, event.data.delta, event.created)),
     ];
     // Self-heal: some token updates land without an event we subscribed to
     // (e.g. loader finishes), so just repaint on an interval.
@@ -88,6 +132,7 @@ const plugin: TuiPluginModule & { id: string } = {
     api.lifecycle.onDispose(() => {
       for (const unsub of unsubs) unsub();
       clearInterval(repaintTimer);
+      if (pendingRepaint !== undefined) clearTimeout(pendingRepaint);
     });
 
     api.slots.register({
@@ -95,7 +140,7 @@ const plugin: TuiPluginModule & { id: string } = {
       slots: {
         sidebar_content(_ctx, props) {
           getRenderTick(); // subscribe to repaint bumps (solid-reactive)
-          return renderPanel(api, props.session_id, config);
+          return renderPanel(api, props.session_id, config, trackers.get(props.session_id));
         },
       },
     });
@@ -199,7 +244,7 @@ function sessionUsage(api: TuiPluginApi, sessionId: string, config: PluginOption
   return computeContext(counts, limits, cost, estimates, config.exclude);
 }
 
-function renderPanel(api: TuiPluginApi, sessionId: string, config: PluginOptions): JSX.Element {
+function renderPanel(api: TuiPluginApi, sessionId: string, config: PluginOptions, tps?: TpsTracker): JSX.Element {
   const theme = api.theme.current;
   const usage = sessionUsage(api, sessionId, config);
   const header = <text fg={theme.text} attributes={BOLD}>Context</text>;
@@ -291,7 +336,36 @@ function renderPanel(api: TuiPluginApi, sessionId: string, config: PluginOptions
     lines.push(<text fg={theme.textMuted}>{`${money.format(usage.cost)} spent`}</text>);
   }
 
+  if (tps && tps.total() > 0) {
+    const instant = tps.instant();
+    const live = instant > 0.05;
+    const avg = tps.average();
+    lines.push(
+      <box flexDirection="row">
+        {live ? <text fg={speedColor(instant, theme)}>{`${instant.toFixed(1)} TPS`}</text> : null}
+        <text fg={theme.textMuted}>
+          {live
+            ? ` · avg ${avg.toFixed(1)} · ${formatDuration(tps.elapsed())}`
+            : `avg ${avg.toFixed(1)} TPS · ${formatDuration(tps.elapsed())}`}
+        </text>
+      </box>,
+    );
+  }
+
   return <box width="100%" flexDirection="column">{lines}</box>;
+}
+
+function formatDuration(ms: number): string {
+  const seconds = ms / 1000;
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+  const whole = Math.round(seconds);
+  return `${Math.floor(whole / 60)}m${String(whole % 60).padStart(2, "0")}s`;
+}
+
+function speedColor(tps: number, theme: TuiPluginApi["theme"]["current"]): RGBA {
+  if (tps < 10) return theme.error;
+  if (tps < 50) return theme.warning;
+  return theme.success;
 }
 
 function segmentColor(id: SegmentId, theme: TuiPluginApi["theme"]["current"], estimate: boolean): RGBA {

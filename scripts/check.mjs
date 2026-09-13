@@ -1,6 +1,6 @@
 // Self-check for the pure context-window math (src/context.ts). Node >= 22.6.
 import assert from "node:assert/strict";
-import { computeContext, estimateTokens, segmentBar, tokensOf } from "../src/context.ts";
+import { computeContext, createTpsTracker, estimateTokens, segmentBar, tokensOf } from "../src/context.ts";
 
 const ok = (name, fn) => {
   fn();
@@ -117,6 +117,37 @@ ok("computeContext exclude drops segments", () => {
   assert.equal(s.segments.some((segment) => segment.id === "system"), false);
   assert.equal(s.segments.some((segment) => segment.id === "reserved"), false);
   assert.equal(s.segments.some((segment) => segment.id === "free"), true);
+});
+
+ok("createTpsTracker average/total/elapsed over active span", () => {
+  const t = createTpsTracker();
+  t.record(100, 0);
+  t.record(100, 1000);
+  assert.equal(t.total(), 200);
+  assert.equal(t.elapsed(), 1000);
+  assert.equal(t.average(), 200); // 200 tokens / 1s, idle time excluded
+});
+
+ok("createTpsTracker instant decays once the window goes quiet", () => {
+  const now = Date.now();
+  const live = createTpsTracker({ windowMs: 1000 });
+  live.record(40, now - 100);
+  assert.ok(live.instant() > 0);
+  const stale = createTpsTracker({ windowMs: 1000 });
+  stale.record(40, now - 5000);
+  assert.equal(stale.instant(), 0);
+});
+
+ok("createTpsTracker ignores non-positive counts and resets", () => {
+  const t = createTpsTracker();
+  t.record(0, 1000);
+  t.record(-5, 1000);
+  assert.equal(t.total(), 0);
+  t.record(10, 1000);
+  t.reset();
+  assert.equal(t.total(), 0);
+  assert.equal(t.elapsed(), 0);
+  assert.equal(t.average(), 0);
 });
 
 console.log("\nall checks passed");

@@ -209,6 +209,112 @@ export function computeContext(
   };
 }
 
+export interface TpsTracker {
+  /** record `count` tokens stamped at `timestamp` (host clock; defaults to now) */
+  record(count: number, timestamp?: number): void;
+  /** smoothed instantaneous tokens/sec, 0 once the window has gone quiet */
+  instant(): number;
+  /** average tokens/sec over the active generation span (first → last token) */
+  average(): number;
+  /** total tokens recorded */
+  total(): number;
+  /** active generation span in ms (first → last token) */
+  elapsed(): number;
+  reset(): void;
+}
+
+export interface TpsTrackerOptions {
+  /** rolling window for the instantaneous rate (ms) */
+  windowMs?: number;
+  /** EWMA half-life for smoothing the instantaneous rate (ms) */
+  halfLifeMs?: number;
+}
+
+const MIN_WINDOW_SECONDS = 0.3;
+const MAX_INITIAL_TPS = 100;
+
+/**
+ * Rolling tokens-per-second tracker (same idea as opencode-tps-meter, trimmed
+ * down): records token counts stamped with the host clock and reports a
+ * smoothed instantaneous rate over `windowMs`. The average uses the active span
+ * (first → last token) rather than wall time, so idle time doesn't drag it to 0.
+ */
+export function createTpsTracker(options: TpsTrackerOptions = {}): TpsTracker {
+  const windowMs = options.windowMs && options.windowMs > 0 ? options.windowMs : 1000;
+  const halfLifeMs = options.halfLifeMs && options.halfLifeMs > 0 ? options.halfLifeMs : 250;
+  let samples: { t: number; count: number }[] = [];
+  let total = 0;
+  let start = -1;
+  let last = -1;
+  let smoothed = 0;
+  let smoothedAt = 0;
+  let hasSmoothed = false;
+
+  function raw(now: number): number {
+    if (samples.length === 0) return 0;
+    const cutoff = now - windowMs;
+    let tokens = 0;
+    let oldest = now;
+    for (const sample of samples) {
+      if (sample.t >= cutoff) {
+        tokens += sample.count;
+        if (sample.t < oldest) oldest = sample.t;
+      }
+    }
+    if (tokens === 0) return 0;
+    // Denominator runs from the oldest in-window token to `now`, so a burst
+    // followed by idle decays naturally instead of reading as a spike.
+    return tokens / Math.max((now - oldest) / 1000, MIN_WINDOW_SECONDS);
+  }
+
+  return {
+    record(count, timestamp) {
+      if (!(count > 0)) return;
+      const t = timestamp ?? Date.now();
+      if (start < 0) start = t;
+      if (t > last) last = t;
+      total += count;
+      samples.push({ t, count });
+      const cutoff = t - windowMs;
+      let drop = 0;
+      while (drop < samples.length && samples[drop].t < cutoff) drop++;
+      if (drop > 0) samples = samples.slice(drop);
+      const value = raw(t);
+      if (!hasSmoothed) {
+        smoothed = Math.min(value, MAX_INITIAL_TPS);
+        hasSmoothed = true;
+      } else {
+        const dt = Math.max(1, t - smoothedAt);
+        const alpha = Math.exp((-Math.LN2 * dt) / halfLifeMs);
+        smoothed = alpha * smoothed + (1 - alpha) * value;
+      }
+      smoothedAt = t;
+    },
+    instant() {
+      if (!hasSmoothed || Date.now() - last > windowMs) return 0;
+      return smoothed;
+    },
+    average() {
+      return start < 0 ? 0 : total / Math.max((last - start) / 1000, MIN_WINDOW_SECONDS);
+    },
+    total() {
+      return total;
+    },
+    elapsed() {
+      return start < 0 ? 0 : last - start;
+    },
+    reset() {
+      samples = [];
+      total = 0;
+      start = -1;
+      last = -1;
+      smoothed = 0;
+      smoothedAt = 0;
+      hasSmoothed = false;
+    },
+  };
+}
+
 /**
  * Convert segment token counts into a fixed-width char layout. `width` cells are
  * filled by segment in order (rounded, floored-adjust to hit the width exactly);
