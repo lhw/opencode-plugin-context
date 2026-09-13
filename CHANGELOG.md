@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.2.0](https://github.com/lhw/opencode-plugin-context/compare/v1.1.2...v1.2.0) (2026-09-13)
+
+
+### Features
+
+* live tokens-per-second line in the sidebar ([7a378c3](https://github.com/lhw/opencode-plugin-context/commit/7a378c3825a0a53b4d86a53e4c141c87da99f386))
+
+
+### Bug Fixes
+
+* keep context panel working on opencode v2 ([5a790dd](https://github.com/lhw/opencode-plugin-context/commit/5a790dd7806024780a1abb24b857bb2ca11854ba))
+
+
+### Reverts
+
+* reuse web UI context categories and single-number legend ([aee63ca](https://github.com/lhw/opencode-plugin-context/commit/aee63ca61ccf166897a08aa2eb270d38763b4f67))
+
 ## [1.1.2](https://github.com/lhw/opencode-plugin-context/compare/v1.1.1...v1.1.2) (2026-09-02)
 
 
