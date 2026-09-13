@@ -40,12 +40,12 @@
     "access": "public"
   },
   "peerDependencies": {
-    "@opencode-ai/plugin": ">=1.14.0",
+    "@opencode-ai/plugin": ">=0.0.0-next-17444",
     "@opentui/core": ">=0.2.9",
     "@opentui/solid": ">=0.2.9"
   },
   "devDependencies": {
-    "@opencode-ai/plugin": "1.18.23",
+    "@opencode-ai/plugin": "0.0.0-next-17444",
     "@opentui/core": "0.5.8",
     "@opentui/solid": "0.5.8",
     "@types/node": "^26.2.0",

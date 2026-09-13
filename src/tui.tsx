@@ -1,6 +1,6 @@
 import { createTextAttributes, type RGBA } from "@opentui/core";
 import { createSignal } from "solid-js";
-import type { TuiPluginApi, TuiPluginModule } from "@opencode-ai/plugin/tui";
+import type { TuiPluginApi, TuiPluginModule } from "@opencode-ai/plugin/v1/tui";
 import type { JSX } from "@opentui/solid";
 import {
   computeContext,
@@ -73,13 +73,11 @@ const plugin: TuiPluginModule & { id: string } = {
       api.renderer.requestRender();
     };
 
+    // Repaint on the session-level events that exist in both opencode 1.x and
+    // v2 (created/status/idle) and lean on the interval below for in-turn
+    // updates. (v2 dropped the per-message events this panel used to watch.)
     const unsubs = [
-      api.event.on("message.updated", repaint),
-      api.event.on("message.part.updated", repaint),
-      api.event.on("message.part.removed", repaint),
-      api.event.on("message.removed", repaint),
-      api.event.on("session.updated", repaint),
-      api.event.on("session.compacted", repaint),
+      api.event.on("session.created", repaint),
       api.event.on("session.status", repaint),
       api.event.on("session.idle", repaint),
     ];
