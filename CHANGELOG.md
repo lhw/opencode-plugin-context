@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.0.0](https://github.com/lhw/opencode-plugin-context/compare/v1.2.0...v2.0.0) (2026-09-20)
+
+
+### ⚠ BREAKING CHANGES
+
+* OpenCode 1.x is no longer supported. `engines.opencode` is now `>=2.0.0`.
+
+### Features
+
+* migrate to the OpenCode V2 TUI plugin API ([#12](https://github.com/lhw/opencode-plugin-context/issues/12)) ([c2b338a](https://github.com/lhw/opencode-plugin-context/commit/c2b338a43acca6b167b71bf05f971a60257939a4))
+
 ## [1.2.0](https://github.com/lhw/opencode-plugin-context/compare/v1.1.2...v1.2.0) (2026-09-13)
 
 
