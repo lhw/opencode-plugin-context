@@ -1,6 +1,6 @@
 import { createTextAttributes, type RGBA } from "@opentui/core";
 import { createSignal } from "solid-js";
-import type { TuiPluginApi, TuiPluginModule } from "@opencode-ai/plugin/v1/tui";
+import type { Plugin } from "@opencode/plugin/tui";
 import type { JSX } from "@opentui/solid";
 import {
   computeContext,
@@ -14,6 +14,11 @@ import {
   type TpsTracker,
   type WindowLimits,
 } from "./context.ts";
+
+type Context = Plugin.Context;
+type Theme = Context["theme"];
+type Messages = ReturnType<Context["data"]["session"]["message"]["list"]>;
+type AssistantMessage = Extract<Messages[number], { type: "assistant" }>;
 
 interface PluginOptions {
   /** split the prompt bucket into user/tools/system using char-count estimates */
@@ -41,7 +46,6 @@ function normalizeOptions(raw: unknown): PluginOptions {
 // for the right-aligned percent so the bar fills the column.
 const BAR_WIDTH = 32;
 const BOLD = createTextAttributes({ bold: true });
-const SLOT_ORDER = 60;
 const SEGMENT_LABEL: Record<SegmentId, string> = {
   cached: "c",
   user: "u",
@@ -58,17 +62,15 @@ const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD
 const intFmt = new Intl.NumberFormat("en-US");
 const compactFmt = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
 
-const plugin: TuiPluginModule & { id: string } = {
+const plugin: Plugin.Definition = {
   id: "opencode-plugin-context",
-  tui: async (api, rawOptions) => {
-    const config = normalizeOptions(rawOptions);
-    // Reactive repaint: solid signal read inside the slot so the host re-renders
-    // it when we bump it (api.renderer.requestRender alone does not repaint here).
+  setup(context) {
+    const config = normalizeOptions(context.options);
+    // Reactive repaint: the signal is read inside the slot render so the host
+    // re-renders it when we bump it. Session/message data is reactive on its
+    // own, but live TPS lives outside that store.
     const [getRenderTick, setRenderTick] = createSignal(0);
-    const repaint = () => {
-      setRenderTick((n) => n + 1);
-      api.renderer.requestRender();
-    };
+    const repaint = () => setRenderTick((n) => n + 1);
 
     // Live TPS: token deltas are estimated with the same chars/4 heuristic the
     // panel already uses, tracked per session. Sub-token deltas are carried over
@@ -110,104 +112,113 @@ const plugin: TuiPluginModule & { id: string } = {
       }
     };
 
-    // Repaint on the session-level events that exist in both opencode 1.x and
-    // v2 (created/status/idle) and lean on the interval below for in-turn
-    // updates. (v2 dropped the per-message events this panel used to watch.)
+    // Repaint on usage/status changes so the panel stays live between deltas.
     const unsubs = [
-      api.event.on("session.created", repaint),
-      api.event.on("session.status", repaint),
-      api.event.on("session.idle", repaint),
-      api.event.on("session.text.delta", (event) => onDelta(event.data.sessionID, event.data.delta, event.created)),
-      api.event.on("session.reasoning.delta", (event) => onDelta(event.data.sessionID, event.data.delta, event.created)),
+      context.data.on("session.text.delta", (event) => onDelta(event.data.sessionID, event.data.delta, event.created)),
+      context.data.on("session.reasoning.delta", (event) => onDelta(event.data.sessionID, event.data.delta, event.created)),
+      context.data.on("session.usage.updated", repaint),
+      context.data.on("session.status", repaint),
+      context.data.on("session.idle", repaint),
     ];
-    // Self-heal: some token updates land without an event we subscribed to
-    // (e.g. loader finishes), so just repaint on an interval.
-    const repaintTimer = setInterval(repaint, 2_000);
 
-    api.lifecycle.onDispose(() => {
-      for (const unsub of unsubs) unsub();
-      clearInterval(repaintTimer);
-      if (pendingRepaint !== undefined) clearTimeout(pendingRepaint);
-    });
-
-    api.slots.register({
-      order: SLOT_ORDER,
-      slots: {
-        sidebar_content(_ctx, props) {
-          getRenderTick(); // subscribe to repaint bumps (solid-reactive)
-          return renderPanel(api, props.session_id, config, trackers.get(props.session_id));
-        },
+    const disposeSlot = context.ui.slot({
+      append: "sidebar.content",
+      render: (input) => {
+        getRenderTick(); // subscribe to repaint bumps (solid-reactive)
+        return renderPanel(context, input.sessionID, config, trackers.get(input.sessionID));
       },
     });
+
+    return () => {
+      for (const unsub of unsubs) unsub();
+      disposeSlot();
+      if (pendingRepaint !== undefined) clearTimeout(pendingRepaint);
+    };
   },
 };
 
-/** char-count estimates of the visible prompt split, from message parts (incl. MCP tool calls). */
-function collectEstimates(api: TuiPluginApi, sessionId: string): Estimates {
+/**
+ * Latest resolved assistant turn, matching the host's own sidebar context
+ * block: the last assistant message carrying tokens that sits after the last
+ * completed compaction and before the session's revert boundary.
+ */
+function latestAssistant(messages: Messages, revertMessageID?: string): AssistantMessage | undefined {
+  let end = messages.length;
+  if (revertMessageID) {
+    const boundary = messages.findIndex((message) => message.id === revertMessageID);
+    if (boundary === -1) return undefined;
+    end = boundary;
+  }
+  let compaction = -1;
+  for (let i = 0; i < end; i++) {
+    const message = messages[i];
+    if (message.type === "compaction" && message.status === "completed") compaction = i;
+  }
+  for (let i = end - 1; i > compaction; i--) {
+    const message = messages[i];
+    if (message.type === "assistant" && message.tokens !== undefined) return message;
+  }
+  return undefined;
+}
+
+/** char-count estimates of the visible prompt split, from message content (incl. MCP tool calls). */
+function collectEstimates(messages: Messages): Estimates {
   let user = 0;
   let tools = 0;
-  for (const message of api.state.session.messages(sessionId)) {
-    const role = (message as { role?: string }).role;
-    try {
-      for (const part of api.state.part((message as { id: string }).id)) {
-        const p = part as { type?: string; text?: string; state?: { input?: unknown; output?: unknown; error?: unknown } };
-        if (p.type === "text" && role === "user") {
-          user += estimateTokens(p.text ?? "");
-        } else if (p.type === "tool") {
-          const state = p.state;
-          if (!state) continue;
-          if (state.input !== undefined) tools += estimateTokens(JSON.stringify(state.input));
-          if (typeof state.output === "string") tools += estimateTokens(state.output);
-          else if (typeof state.error === "string") tools += estimateTokens(state.error);
+  for (const message of messages) {
+    if (message.type === "user") {
+      user += estimateTokens(message.text ?? "");
+      continue;
+    }
+    if (message.type !== "assistant") continue;
+    for (const part of message.content) {
+      if (part.type !== "tool") continue;
+      const state = part.state;
+      if (state.status === "streaming") {
+        tools += estimateTokens(state.input);
+        continue;
+      }
+      tools += estimateTokens(JSON.stringify(state.input));
+      if (state.status === "completed") {
+        for (const content of state.content) {
+          if (content.type === "text") tools += estimateTokens(content.text);
+        }
+      } else if (state.status === "error") {
+        tools += estimateTokens(state.error.message);
+        for (const content of state.content ?? []) {
+          if (content.type === "text") tools += estimateTokens(content.text);
         }
       }
-    } catch {
-      // never let an unreadable part break the whole panel
     }
   }
   return { user, tools };
 }
 
-function sessionUsage(api: TuiPluginApi, sessionId: string, config: PluginOptions): ContextState {
-  const messages = api.state.session.messages(sessionId);
-  // Latest resolved assistant turn: matches what opencode itself reports.
-  let last: { tokens?: unknown; providerID?: string; modelID?: string; cost?: number } | undefined;
-  for (const message of messages) {
-    const m = message as { role?: string; tokens?: { output?: number } };
-    if (m.role === "assistant" && (m.tokens?.output ?? 0) > 0) {
-      last = {
-        tokens: m.tokens,
-        providerID: (message as { providerID?: string }).providerID,
-        modelID: (message as { modelID?: string }).modelID,
-        cost: (message as { cost?: number }).cost,
-      };
-    }
-  }
+function sessionUsage(context: Context, sessionId: string, config: PluginOptions): ContextState {
+  const session = context.data.session.get(sessionId);
+  const messages = context.data.session.message.list(sessionId);
+  const last = latestAssistant(messages, session?.revert?.messageID);
+  const counts = tokensOf(last);
 
-  const session = api.state.session.get(sessionId) as { cost?: number } | undefined;
-  const cost =
-    session?.cost ??
-    messages.reduce((sum, message) => {
-      if ((message as { role?: string }).role === "assistant") sum += (message as { cost?: number }).cost ?? 0;
-      return sum;
-    }, 0);
-
-  const counts = tokensOf(last as { tokens?: unknown });
   let limits: WindowLimits | undefined;
-  if (last?.providerID && last.modelID) {
-    const model = api.state.provider.find((p) => p.id === last.providerID)?.models[last.modelID];
+  const lastModel = last?.model;
+  if (lastModel) {
+    const model = context.data.location.model
+      .list(session?.location)
+      ?.find((candidate) => candidate.providerID === lastModel.providerID && candidate.id === lastModel.id);
     if (model?.limit?.context) {
       limits = { context: model.limit.context, output: model.limit.output ?? 0 };
     }
   }
-  const estimates = config.estimate ? collectEstimates(api, sessionId) : undefined;
-  return computeContext(counts, limits, cost, estimates, config.exclude);
+
+  const estimates = config.estimate ? collectEstimates(messages) : undefined;
+  return computeContext(counts, limits, context.data.session.cost(sessionId), estimates, config.exclude);
 }
 
-function renderPanel(api: TuiPluginApi, sessionId: string, config: PluginOptions, tps?: TpsTracker): JSX.Element {
-  const theme = api.theme.current;
-  const usage = sessionUsage(api, sessionId, config);
-  const header = <text fg={theme.text} attributes={BOLD}>Context</text>;
+function renderPanel(context: Context, sessionId: string, config: PluginOptions, tps?: TpsTracker): JSX.Element {
+  const theme = context.theme;
+  const usage = sessionUsage(context, sessionId, config);
+  const header = <text fg={theme.text.base} attributes={BOLD}>Context</text>;
 
   const lines: JSX.Element[] = [header];
   const hasUsage = usage.used > 0;
@@ -249,7 +260,7 @@ function renderPanel(api: TuiPluginApi, sessionId: string, config: PluginOptions
               return (
                 <box flexDirection="row" marginLeft={marginLeft}>
                   <text fg={segmentColor(item.id, theme, true)}>▍</text>
-                  <text fg={theme.textMuted}>{SEGMENT_LABEL[item.id]}{compactFmt.format(item.tokens)}</text>
+                  <text fg={theme.text.muted}>{SEGMENT_LABEL[item.id]}{compactFmt.format(item.tokens)}</text>
                 </box>
               );
             })}
@@ -274,7 +285,7 @@ function renderPanel(api: TuiPluginApi, sessionId: string, config: PluginOptions
             return (
               <box flexDirection="row" marginLeft={marginLeft}>
                 <text fg={segmentColor(cell.id, theme, false)}>▍</text>
-                <text fg={theme.textMuted}>{SEGMENT_LABEL[cell.id]}{compactFmt.format(tokenById.get(cell.id) ?? 0)}</text>
+                <text fg={theme.text.muted}>{SEGMENT_LABEL[cell.id]}{compactFmt.format(tokenById.get(cell.id) ?? 0)}</text>
               </box>
             );
           })}
@@ -285,16 +296,16 @@ function renderPanel(api: TuiPluginApi, sessionId: string, config: PluginOptions
 
   if (hasUsage) {
     lines.push(
-      <text fg={theme.textMuted}>
+      <text fg={theme.text.muted}>
         {`${intFmt.format(usage.used)} / ${usage.known ? intFmt.format(usage.window) : "--"} tokens`}
       </text>,
     );
   } else {
-    lines.push(<text fg={theme.textMuted}>no assistant turns yet</text>);
+    lines.push(<text fg={theme.text.muted}>no assistant turns yet</text>);
   }
 
   if (usage.cost > 0) {
-    lines.push(<text fg={theme.textMuted}>{`${money.format(usage.cost)} spent`}</text>);
+    lines.push(<text fg={theme.text.muted}>{`${money.format(usage.cost)} spent`}</text>);
   }
 
   if (tps && tps.total() > 0) {
@@ -304,7 +315,7 @@ function renderPanel(api: TuiPluginApi, sessionId: string, config: PluginOptions
     lines.push(
       <box flexDirection="row">
         {live ? <text fg={speedColor(instant, theme)}>{`${instant.toFixed(1)} TPS`}</text> : null}
-        <text fg={theme.textMuted}>
+        <text fg={theme.text.muted}>
           {live
             ? ` · avg ${avg.toFixed(1)} · ${formatDuration(tps.elapsed())}`
             : `avg ${avg.toFixed(1)} TPS · ${formatDuration(tps.elapsed())}`}
@@ -323,31 +334,41 @@ function formatDuration(ms: number): string {
   return `${Math.floor(whole / 60)}m${String(whole % 60).padStart(2, "0")}s`;
 }
 
-function speedColor(tps: number, theme: TuiPluginApi["theme"]["current"]): RGBA {
-  if (tps < 10) return theme.error;
-  if (tps < 50) return theme.warning;
-  return theme.success;
+function speedColor(tps: number, theme: Theme): RGBA {
+  if (tps < 10) return theme.text.feedback.error.base;
+  if (tps < 50) return theme.text.feedback.warning.base;
+  return theme.text.feedback.success.base;
 }
 
-function segmentColor(id: SegmentId, theme: TuiPluginApi["theme"]["current"], estimate: boolean): RGBA {
+function segmentColor(id: SegmentId, theme: Theme, estimate: boolean): RGBA {
   const base: Record<SegmentId, RGBA> = {
-    cached: theme.success, prompt: theme.accent, think: theme.warning, out: theme.info,
-    reserved: theme.textMuted, free: theme.text,
-    user: theme.accent, tools: theme.accent, system: theme.accent,
+    cached: theme.text.feedback.success.base,
+    prompt: theme.hue.accent[500],
+    think: theme.text.feedback.warning.base,
+    out: theme.text.feedback.info.base,
+    reserved: theme.text.muted,
+    free: theme.text.base,
+    user: theme.hue.accent[500],
+    tools: theme.hue.accent[500],
+    system: theme.text.feedback.warning.base,
   };
   if (!estimate) return base[id];
   const est: Partial<Record<SegmentId, RGBA>> = {
-    user: theme.info, tools: theme.accent, system: theme.warning,
-    think: theme.secondary, out: theme.text, free: theme.borderSubtle,
+    user: theme.text.feedback.info.base,
+    tools: theme.hue.accent[500],
+    system: theme.text.feedback.warning.base,
+    think: theme.hue.purple[500],
+    out: theme.text.base,
+    free: theme.border.base,
   };
   return est[id] ?? base[id];
 }
 
-function tierColor(percent: number, theme: TuiPluginApi["theme"]["current"]): RGBA {
-  if (percent >= 100) return theme.error;
-  if (percent >= 75) return theme.warning;
-  if (percent >= 50) return theme.accent;
-  return theme.success;
+function tierColor(percent: number, theme: Theme): RGBA {
+  if (percent >= 100) return theme.text.feedback.error.base;
+  if (percent >= 75) return theme.text.feedback.warning.base;
+  if (percent >= 50) return theme.hue.accent[500];
+  return theme.text.feedback.success.base;
 }
 
 export default plugin;

@@ -13,10 +13,10 @@
     "dist"
   ],
   "engines": {
-    "opencode": ">=1.18.0"
+    "opencode": ">=2.0.0"
   },
   "scripts": {
-    "build": "esbuild src/tui.tsx --bundle --format=esm --platform=node --jsx=automatic --jsx-import-source=@opentui/solid --external:@opencode-ai/plugin --external:@opentui/solid --external:@opentui/core --external:solid-js --outfile=dist/tui.js",
+    "build": "esbuild src/tui.tsx --bundle --format=esm --platform=node --jsx=automatic --jsx-import-source=@opentui/solid --external:@opencode/plugin --external:@opencode/client --external:@opentui/solid --external:@opentui/core --external:solid-js --outfile=dist/tui.js",
     "dev:install": "npm run build && mkdir -p \"$HOME/.config/opencode/context\" && cp dist/tui.js \"$HOME/.config/opencode/context/tui.js\"",
     "typecheck": "tsc --noEmit",
     "test": "node scripts/check.mjs",
@@ -40,14 +40,16 @@
     "access": "public"
   },
   "peerDependencies": {
-    "@opencode-ai/plugin": ">=0.0.0-next-17444",
-    "@opentui/core": ">=0.2.9",
-    "@opentui/solid": ">=0.2.9"
+    "@opentui/core": ">=0.5.10",
+    "@opentui/solid": ">=0.5.10",
+    "solid-js": ">=1.9.0"
   },
   "devDependencies": {
-    "@opencode-ai/plugin": "0.0.0-next-17444",
-    "@opentui/core": "0.5.11",
-    "@opentui/solid": "0.5.11",
+    "@opencode/client": "^2.0.11",
+    "@opencode/plugin": "^2.0.11",
+    "@opencode/theme": "^2.0.11",
+    "@opentui/core": "^0.5.11",
+    "@opentui/solid": "^0.5.11",
     "@types/node": "^26.2.0",
     "esbuild": "^0.28.0",
     "solid-js": "1.9.12",
