@@ -239,59 +239,24 @@ function renderPanel(context: Context, sessionId: string, config: PluginOptions,
         </text>
       </box>,
     );
-    if (config.estimate) {
-      // Up to 8 marker+label entries don't fit the ~37-col sidebar on one line,
-      // so the estimate view splits into used buckets + window budget rows.
-      // Each row's marker sits at the cumulative bar offset of its segment so
-      // they line up with the cells above.
-      const cellsById = new Map(bar.map((cell) => [cell.id, cell.cells]));
-      const tokenById = new Map(usage.segments.map((segment) => [segment.id, segment.tokens]));
-      const row = (ids: SegmentId[], startAt: number) => {
-        const items = ids
-          .map((id) => ({ id, cells: cellsById.get(id) ?? 0, tokens: tokenById.get(id) ?? 0 }))
-          .filter((item) => item.cells > 0 || item.tokens > 0);
-        if (items.length === 0) return null;
-        let cumulative = startAt;
-        return (
+    // Legend: one colored `▍` + letter + count per segment, in bar order,
+    // flowing across lines (flexWrap) as the sidebar narrows. Exact marker
+    // alignment with the bar is deliberately dropped: a segment's bar width can
+    // be a fraction of a cell while its label ("c40K") is several cells wide,
+    // so markers could only ever line up for the widest buckets and the tiny
+    // ones would collide. Color + left-to-right order carry the mapping
+    // instead, and every nonzero segment is listed here — including sub-cell
+    // ones the bar itself rounds away.
+    lines.push(
+      <box flexDirection="row" flexWrap="wrap" gap={1}>
+        {usage.segments.map((segment) => (
           <box flexDirection="row">
-            {items.map((item) => {
-              const marginLeft = cumulative;
-              cumulative += item.cells;
-              return (
-                <box flexDirection="row" marginLeft={marginLeft}>
-                  <text fg={segmentColor(item.id, theme, true)}>▍</text>
-                  <text fg={theme.text.muted}>{SEGMENT_LABEL[item.id]}{compactFmt.format(item.tokens)}</text>
-                </box>
-              );
-            })}
+            <text fg={segmentColor(segment.id, theme, config.estimate)}>▍</text>
+            <text fg={theme.text.muted}>{SEGMENT_LABEL[segment.id]}{compactFmt.format(segment.tokens)}</text>
           </box>
-        );
-      };
-      const usedStart = 0;
-      const usedIds: SegmentId[] = ["cached", "user", "tools", "system", "think", "out"];
-      const budgetStart = usedIds.reduce((sum, id) => sum + (cellsById.get(id) ?? 0), 0);
-      const usedLegend = row(usedIds, usedStart);
-      const budgetLegend = row(["reserved", "free"], budgetStart);
-      if (usedLegend) lines.push(usedLegend);
-      if (budgetLegend) lines.push(budgetLegend);
-    } else {
-      const tokenById = new Map(usage.segments.map((segment) => [segment.id, segment.tokens]));
-      let cumulative = 0;
-      lines.push(
-        <box flexDirection="row">
-          {bar.map((cell) => {
-            const marginLeft = cumulative;
-            cumulative += cell.cells;
-            return (
-              <box flexDirection="row" marginLeft={marginLeft}>
-                <text fg={segmentColor(cell.id, theme, false)}>▍</text>
-                <text fg={theme.text.muted}>{SEGMENT_LABEL[cell.id]}{compactFmt.format(tokenById.get(cell.id) ?? 0)}</text>
-              </box>
-            );
-          })}
-        </box>,
-      );
-    }
+        ))}
+      </box>,
+    );
   }
 
   if (hasUsage) {
