@@ -125,7 +125,15 @@ ok("createTpsTracker average/total/elapsed over active span", () => {
   t.record(100, 1000);
   assert.equal(t.total(), 200);
   assert.equal(t.elapsed(), 1000);
-  assert.equal(t.average(), 200); // 200 tokens / 1s, idle time excluded
+  assert.equal(t.average(), 200); // 200 tokens / 1s; long idle gap excluded
+  t.record(100, 60_000);
+  assert.equal(t.total(), 300);
+  assert.equal(t.elapsed(), 1000);
+  assert.equal(t.average(), 300);
+  t.record(100, 61_000);
+  assert.equal(t.total(), 400);
+  assert.equal(t.elapsed(), 2000);
+  assert.equal(t.average(), 200); // separate active periods are combined
 });
 
 ok("createTpsTracker instant decays once the window goes quiet", () => {

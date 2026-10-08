@@ -140,11 +140,11 @@ export interface TpsTracker {
   record(count: number, timestamp?: number): void;
   /** smoothed instantaneous tokens/sec, 0 once the window has gone quiet */
   instant(): number;
-  /** average tokens/sec over the active generation span (first → last token) */
+  /** average tokens/sec, excluding token gaps longer than 5s */
   average(): number;
   /** total tokens recorded */
   total(): number;
-  /** active generation span in ms (first → last token) */
+  /** accumulated active time, excluding token gaps longer than 5s */
   elapsed(): number;
   reset(): void;
 }
@@ -158,12 +158,13 @@ export interface TpsTrackerOptions {
 
 const MIN_WINDOW_SECONDS = 0.3;
 const MAX_INITIAL_TPS = 100;
+const ACTIVE_GAP_MS = 5000;
 
 /**
  * Rolling tokens-per-second tracker (same idea as opencode-tps-meter, trimmed
  * down): records token counts stamped with the host clock and reports a
- * smoothed instantaneous rate over `windowMs`. The average uses the active span
- * (first → last token) rather than wall time, so idle time doesn't drag it to 0.
+ * smoothed instantaneous rate over `windowMs`. The average excludes gaps longer
+ * than `ACTIVE_GAP_MS`, so pauses between generations don't drag it to 0.
  */
 export function createTpsTracker(options: TpsTrackerOptions = {}): TpsTracker {
   const windowMs = options.windowMs && options.windowMs > 0 ? options.windowMs : 1000;
@@ -172,6 +173,7 @@ export function createTpsTracker(options: TpsTrackerOptions = {}): TpsTracker {
   let total = 0;
   let start = -1;
   let last = -1;
+  let activeElapsed = 0;
   let smoothed = 0;
   let smoothedAt = 0;
   let hasSmoothed = false;
@@ -198,7 +200,8 @@ export function createTpsTracker(options: TpsTrackerOptions = {}): TpsTracker {
       if (!(count > 0)) return;
       const t = timestamp ?? Date.now();
       if (start < 0) start = t;
-      if (t > last) last = t;
+      const gap = t - last;
+      if (last >= 0 && gap > 0 && gap <= ACTIVE_GAP_MS) activeElapsed += gap;
       total += count;
       samples.push({ t, count });
       const cutoff = t - windowMs;
@@ -206,7 +209,7 @@ export function createTpsTracker(options: TpsTrackerOptions = {}): TpsTracker {
       while (drop < samples.length && samples[drop].t < cutoff) drop++;
       if (drop > 0) samples = samples.slice(drop);
       const value = raw(t);
-      if (!hasSmoothed) {
+      if (!hasSmoothed || gap > ACTIVE_GAP_MS) {
         smoothed = Math.min(value, MAX_INITIAL_TPS);
         hasSmoothed = true;
       } else {
@@ -215,25 +218,27 @@ export function createTpsTracker(options: TpsTrackerOptions = {}): TpsTracker {
         smoothed = alpha * smoothed + (1 - alpha) * value;
       }
       smoothedAt = t;
+      if (t > last) last = t;
     },
     instant() {
       if (!hasSmoothed || Date.now() - last > windowMs) return 0;
       return smoothed;
     },
     average() {
-      return start < 0 ? 0 : total / Math.max((last - start) / 1000, MIN_WINDOW_SECONDS);
+      return start < 0 ? 0 : total / Math.max(activeElapsed / 1000, MIN_WINDOW_SECONDS);
     },
     total() {
       return total;
     },
     elapsed() {
-      return start < 0 ? 0 : last - start;
+      return activeElapsed;
     },
     reset() {
       samples = [];
       total = 0;
       start = -1;
       last = -1;
+      activeElapsed = 0;
       smoothed = 0;
       smoothedAt = 0;
       hasSmoothed = false;
