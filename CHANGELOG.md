@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.1](https://github.com/lhw/opencode-plugin-context/compare/v2.0.0...v2.0.1) (2026-10-08)
+
+
+### Bug Fixes
+
+* replace misaligned legend with a flowing one ([45985c0](https://github.com/lhw/opencode-plugin-context/commit/45985c064e5da2cfca442df17c3ceabb998fed54))
+
 ## [2.0.0](https://github.com/lhw/opencode-plugin-context/compare/v1.2.0...v2.0.0) (2026-09-20)
 
 
