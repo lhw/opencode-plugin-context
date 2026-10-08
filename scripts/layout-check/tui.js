@@ -7,13 +7,13 @@ import plugin from "../../dist/tui.js";
 const fixtures = [
   { name: "lopsided", input: 0, output: 0, reasoning: 5242, cached: 221100,
     window: 1048576, reserved: 524288, estimate: false,
-    legend: "▍c221.1K ▍t5.2K ▍r524.3K ▍f297.9K" },
+    legend: "▍c221K ▍t5K ▍r524K ▍f298K" },
   { name: "sub-cell", input: 2500, output: 57, reasoning: 559, cached: 170000,
     window: 1000000, reserved: 384000, estimate: false,
-    legend: "▍c170K ▍p2.5K ▍t559 ▍o57 ▍r383.9K ▍f442.9K" },
+    legend: "▍c170K ▍p3K ▍t559 ▍o57 ▍r384K ▍f443K" },
   { name: "estimates", input: 110000, output: 3000, reasoning: 500, cached: 40000,
     window: 200000, reserved: 8000, estimate: true,
-    legend: "▍c40K ▍u25K ▍m15K ▍s70K ▍t500 ▍o3K ▍r5K ▍f41.5K" },
+    legend: "▍c40K ▍u25K ▍m15K ▍s70K ▍t500 ▍o3K ▍r5K ▍f42K" },
 ];
 
 export default {

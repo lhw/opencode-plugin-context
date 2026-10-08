@@ -60,7 +60,7 @@ const SEGMENT_LABEL: Record<SegmentId, string> = {
 
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 const intFmt = new Intl.NumberFormat("en-US");
-const compactFmt = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
+const compactFmt = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 0 });
 
 const plugin: Plugin.Definition = {
   id: "opencode-plugin-context",
