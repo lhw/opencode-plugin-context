@@ -203,6 +203,18 @@ npm run dev:install  # build + install into ~/.config/opencode/context/
 npm publish          # runs typecheck + build + test first
 ```
 
+For the legend's native layout regression check, build first, then open a terminal
+at least 80 columns × 60 rows and run from this repository:
+
+```sh
+OPENCODE_CLI_CONFIG_CONTENT="{\"plugins\":[\"$PWD/scripts/layout-check\"]}" opencode
+```
+
+This renders fixed lopsided, sub-cell, and estimate fixtures at 37 and 24 columns
+without making model requests or changing your configuration. The check writes
+`/tmp/opencode/context-layout-check.json` with `passed`, assertions, and the actual
+rendered frame. Exit the CLI after the fixtures appear.
+
 ## License
 
 MIT

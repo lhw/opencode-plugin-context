@@ -239,23 +239,18 @@ function renderPanel(context: Context, sessionId: string, config: PluginOptions,
         </text>
       </box>,
     );
-    // Legend: one colored `▍` + letter + count per segment, in bar order,
-    // flowing across lines (flexWrap) as the sidebar narrows. Exact marker
-    // alignment with the bar is deliberately dropped: a segment's bar width can
-    // be a fraction of a cell while its label ("c40K") is several cells wide,
-    // so markers could only ever line up for the widest buckets and the tiny
-    // ones would collide. Color + left-to-right order carry the mapping
-    // instead, and every nonzero segment is listed here — including sub-cell
-    // ones the bar itself rounds away.
+    // One text buffer wraps between entries, never between a marker and count.
+    // Nested flex boxes can shrink labels to single columns and stretch rows.
     lines.push(
-      <box flexDirection="row" flexWrap="wrap" gap={1}>
-        {usage.segments.map((segment) => (
-          <box flexDirection="row">
-            <text fg={segmentColor(segment.id, theme, config.estimate)}>▍</text>
-            <text fg={theme.text.muted}>{SEGMENT_LABEL[segment.id]}{compactFmt.format(segment.tokens)}</text>
-          </box>
+      <text fg={theme.text.muted} wrapMode="word" flexShrink={0}>
+        {usage.segments.map((segment, index) => (
+          <span>
+            {index > 0 ? " " : ""}
+            <span style={{ fg: segmentColor(segment.id, theme, config.estimate) }}>▍</span>
+            {SEGMENT_LABEL[segment.id]}{compactFmt.format(segment.tokens)}
+          </span>
         ))}
-      </box>,
+      </text>,
     );
   }
 
