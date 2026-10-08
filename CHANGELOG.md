@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.0.2](https://github.com/lhw/opencode-plugin-context/compare/v2.0.1...v2.0.2) (2026-10-08)
+
+
+### Bug Fixes
+
+* keep legend labels intact with word-wrapped text ([ddd1849](https://github.com/lhw/opencode-plugin-context/commit/ddd18493d0060c911cf8cdbb3b855858d90191af))
+* round compact legend counts ([2f3153f](https://github.com/lhw/opencode-plugin-context/commit/2f3153f4a4d6bcfdd37101bd3dd8e0c59ac27d77))
+
 ## [2.0.1](https://github.com/lhw/opencode-plugin-context/compare/v2.0.0...v2.0.1) (2026-10-08)
 
 
