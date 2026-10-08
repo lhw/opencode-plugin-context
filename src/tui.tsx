@@ -322,7 +322,7 @@ function segmentColor(id: SegmentId, theme: Theme, estimate: boolean): RGBA {
     user: theme.text.feedback.info.base,
     tools: theme.hue.accent[500],
     system: theme.text.feedback.warning.base,
-    think: theme.hue.purple[500],
+    think: theme.hue.interactive[500],
     out: theme.text.base,
     free: theme.border.base,
   };
